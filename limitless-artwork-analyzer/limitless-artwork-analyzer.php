@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Limitless Artwork Analyzer
  * Description: Adds a PNG artwork upload and analyzer box to selected WooCommerce product pages.
- * Version: 1.0.0
+ * Version: 1.0.2
  * Author: Limitless
  * Text Domain: limitless-artwork-analyzer
  * Requires PHP: 7.4
@@ -13,7 +13,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'LAA_VERSION', '1.0.0' );
+define( 'LAA_VERSION', '1.0.2' );
 define( 'LAA_PLUGIN_FILE', __FILE__ );
 define( 'LAA_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'LAA_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -98,9 +98,12 @@ final class Limitless_Artwork_Analyzer {
 		return array(
 			'enabled'                          => 'yes',
 			'product_ids'                      => '',
+			'max_upload_size_mb'               => 200,
 			'min_dimension_inches'             => 19,
 			'max_print_width_inches'           => 22.5,
 			'long_png_warning_inches'          => 100,
+			'max_full_scan_pixels'             => 50000000,
+			'max_sampled_scan_pixels'          => 250000000,
 			'semi_transparent_alpha_threshold' => 254,
 			'poor_dpi_threshold'               => 150,
 			'fair_dpi_min'                     => 150,
@@ -145,6 +148,22 @@ final class Limitless_Artwork_Analyzer {
 		}
 
 		return array_values( array_unique( $ids ) );
+	}
+
+	/**
+	 * Get the configured plugin upload size in bytes.
+	 *
+	 * This is separate from PHP/WordPress server limits. If the server limit is
+	 * lower than this setting, PHP may still reject the upload before the plugin
+	 * receives it.
+	 *
+	 * @return int
+	 */
+	public static function get_configured_max_upload_bytes() {
+		$settings = self::get_settings();
+		$mb       = isset( $settings['max_upload_size_mb'] ) ? (float) $settings['max_upload_size_mb'] : 200;
+
+		return max( 1, (int) round( $mb * MB_IN_BYTES ) );
 	}
 
 	/**

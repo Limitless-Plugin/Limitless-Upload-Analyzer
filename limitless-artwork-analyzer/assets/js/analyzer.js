@@ -27,6 +27,20 @@
 	}
 
 	/**
+	 * Format a check result that may have been skipped.
+	 *
+	 * @param {boolean|null} value Check value.
+	 * @return {string}
+	 */
+	function checkResult(value) {
+		if (value === null || typeof value === 'undefined') {
+			return 'Skipped';
+		}
+
+		return yesNo(value);
+	}
+
+	/**
 	 * Create one result row.
 	 *
 	 * @param {string} label Result label.
@@ -64,9 +78,10 @@
 		html += resultRow('Print dimensions', analysis.width_inches + '" x ' + analysis.height_inches + '"');
 		html += resultRow('DPI used', analysis.dpi_used + (analysis.dpi_assumed ? ' (assumed)' : ''));
 		html += resultRow('Quality rating', analysis.quality_rating);
-		html += resultRow('Has transparency', yesNo(analysis.has_transparency));
-		html += resultRow('Transparent background', yesNo(analysis.transparent_background));
-		html += resultRow('Semi-transparent pixels', yesNo(analysis.semi_transparent_pixels_detected));
+		html += resultRow('Analysis mode', analysis.scan_mode_label || 'Standard scan');
+		html += resultRow('Has transparency', checkResult(analysis.has_transparency));
+		html += resultRow('Transparent background', checkResult(analysis.transparent_background));
+		html += resultRow('Semi-transparent pixels', checkResult(analysis.semi_transparent_pixels_detected));
 		html += '</div>';
 
 		if (analysis.dpi_message) {
@@ -83,6 +98,22 @@
 			html += '</ul></div>';
 		} else if (analysis.success_message) {
 			html += '<div class="laa-notice laa-notice--success">' + escapeHtml(analysis.success_message) + '</div>';
+		}
+
+		if (Array.isArray(analysis.skipped_checks) && analysis.skipped_checks.length) {
+			html += '<div class="laa-notice laa-notice--info"><strong>Skipped checks</strong><ul>';
+
+			analysis.skipped_checks.forEach(function (check) {
+				html += '<li>' + escapeHtml(check) + '</li>';
+			});
+
+			html += '</ul>';
+
+			if (analysis.skipped_check_reason) {
+				html += '<p>' + escapeHtml(analysis.skipped_check_reason) + '</p>';
+			}
+
+			html += '</div>';
 		}
 
 		$results.html(html).prop('hidden', false);

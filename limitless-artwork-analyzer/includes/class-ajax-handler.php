@@ -21,6 +21,20 @@ class LAA_Ajax_Handler {
 	private $analyzer;
 
 	/**
+	 * Whether this AJAX request already returned JSON.
+	 *
+	 * @var bool
+	 */
+	private $response_sent = false;
+
+	/**
+	 * Short ID that ties log lines from one AJAX request together.
+	 *
+	 * @var string
+	 */
+	private $request_id = '';
+
+	/**
 	 * Constructor.
 	 */
 	public function __construct() {
@@ -34,12 +48,25 @@ class LAA_Ajax_Handler {
 	 * Receive, validate, store, and analyze an uploaded PNG.
 	 */
 	public function handle_analyze_request() {
+		$this->request_id = function_exists( 'wp_generate_uuid4' ) ? wp_generate_uuid4() : uniqid( 'laa_', true );
+
+		register_shutdown_function( array( $this, 'handle_fatal_shutdown' ) );
+
+		$this->log_step(
+			'AJAX request received',
+			array(
+				'content_length_bytes' => $this->get_request_content_length(),
+				'plugin_upload_limit'  => size_format( Limitless_Artwork_Analyzer::get_configured_max_upload_bytes() ),
+				'server_limits'        => $this->get_server_limits(),
+			)
+		);
+
 		try {
 			$this->process_analyze_request();
 		} catch ( Throwable $throwable ) {
 			$this->send_error(
 				__( 'The upload failed. Please try again. If it keeps happening, please contact us.', 'limitless-artwork-analyzer' ),
-				500,
+				200,
 				'laa_unhandled_exception',
 				$throwable->getMessage(),
 				array(
@@ -62,19 +89,21 @@ class LAA_Ajax_Handler {
 		if ( ! wp_verify_nonce( $nonce, 'laa_analyze_artwork' ) ) {
 			$this->send_error(
 				__( 'Security check failed. Please refresh the page and try again.', 'limitless-artwork-analyzer' ),
-				403,
+				200,
 				'laa_nonce_failed',
 				'wp_verify_nonce() failed for laa_analyze_artwork.'
 			);
 		}
 
+		$this->log_step( 'nonce passed' );
+
 		$product_id = isset( $_POST['product_id'] ) ? absint( wp_unslash( $_POST['product_id'] ) ) : 0;
-		$max_upload_size = wp_max_upload_size();
+		$max_upload_size = Limitless_Artwork_Analyzer::get_configured_max_upload_bytes();
 
 		if ( ! Limitless_Artwork_Analyzer::should_show_for_product( $product_id ) ) {
 			$this->send_error(
 				__( 'The artwork analyzer is not enabled for this product.', 'limitless-artwork-analyzer' ),
-				403,
+				200,
 				'laa_product_not_enabled',
 				'The product ID was not enabled for analysis.',
 				array(
@@ -90,10 +119,10 @@ class LAA_Ajax_Handler {
 				$this->send_error(
 					sprintf(
 						/* translators: %s: upload size. */
-						__( 'The PNG is larger than the current WordPress upload limit of %s. Please choose a smaller PNG or increase the upload limit.', 'limitless-artwork-analyzer' ),
+						__( 'The PNG is larger than the configured upload limit of %s. Please choose a smaller PNG or increase the plugin upload limit.', 'limitless-artwork-analyzer' ),
 						size_format( $max_upload_size )
 					),
-					413,
+					200,
 					'laa_request_too_large',
 					'No $_FILES data was available. The request body may have exceeded upload_max_filesize or post_max_size.',
 					array(
@@ -152,7 +181,7 @@ class LAA_Ajax_Handler {
 
 			$this->send_error(
 				$this->get_upload_error_message( $upload_error_code, $max_upload_size ),
-				$this->get_upload_error_status( $upload_error_code ),
+				200,
 				'laa_php_upload_error',
 				'PHP reported upload error code ' . $upload_error_code . '.',
 				array(
@@ -182,10 +211,10 @@ class LAA_Ajax_Handler {
 			$this->send_error(
 				sprintf(
 					/* translators: %s: upload size. */
-					__( 'The PNG is larger than the current WordPress upload limit of %s. Please choose a smaller PNG or increase the upload limit.', 'limitless-artwork-analyzer' ),
+					__( 'The PNG is larger than the configured upload limit of %s. Please choose a smaller PNG or increase the plugin upload limit.', 'limitless-artwork-analyzer' ),
 					size_format( $max_upload_size )
 				),
-				413,
+				200,
 				'laa_file_too_large',
 				'The uploaded file size exceeded wp_max_upload_size().',
 				array(
@@ -202,6 +231,15 @@ class LAA_Ajax_Handler {
 		if ( '' === $original_name ) {
 			$original_name = 'artwork.png';
 		}
+
+		$this->log_step(
+			'file received',
+			array(
+				'file_name'       => $original_name,
+				'file_size_bytes' => $file_size,
+				'tmp_name'        => $tmp_name,
+			)
+		);
 
 		if ( ! is_uploaded_file( $tmp_name ) ) {
 			$this->send_error(
@@ -225,14 +263,30 @@ class LAA_Ajax_Handler {
 		$upload_location = Limitless_Artwork_Analyzer::ensure_upload_directory();
 
 		if ( is_wp_error( $upload_location ) ) {
-			$this->send_wp_error( $upload_location, 500 );
+			$this->send_wp_error( $upload_location );
 		}
 
 		$stored_file = $this->move_uploaded_png( $tmp_name, $original_name, $upload_location );
 
 		if ( is_wp_error( $stored_file ) ) {
-			$this->send_wp_error( $stored_file, 500 );
+			$this->send_wp_error( $stored_file );
 		}
+
+		$this->log_step(
+			'file moved',
+			array(
+				'file_name' => $stored_file['name'],
+				'file_path' => $stored_file['path'],
+			)
+		);
+
+		$this->log_step(
+			'analyzer started',
+			array(
+				'file_name' => $original_name,
+				'file_path' => $stored_file['path'],
+			)
+		);
 
 		try {
 			$analysis = $this->analyzer->analyze( $stored_file['path'], $original_name, Limitless_Artwork_Analyzer::get_settings() );
@@ -241,7 +295,7 @@ class LAA_Ajax_Handler {
 
 			$this->send_error(
 				__( 'This PNG could not be analyzed. It may be corrupted, too large, or saved in an unsupported PNG format.', 'limitless-artwork-analyzer' ),
-				500,
+				200,
 				'laa_analyzer_exception',
 				$throwable->getMessage(),
 				array(
@@ -265,6 +319,17 @@ class LAA_Ajax_Handler {
 
 		$token = wp_generate_password( 40, false, false );
 		set_transient( 'laa_analysis_' . $token, $analysis, DAY_IN_SECONDS );
+
+		$this->log_step(
+			'response returned',
+			array(
+				'type'       => 'success',
+				'file_name'  => $original_name,
+				'token_hash' => wp_hash( $token ),
+			)
+		);
+
+		$this->response_sent = true;
 
 		wp_send_json_success(
 			array(
@@ -387,7 +452,7 @@ class LAA_Ajax_Handler {
 			case UPLOAD_ERR_FORM_SIZE:
 				return sprintf(
 					/* translators: %s: upload size. */
-					__( 'The selected PNG is too large for the current server upload limit of %s. Please choose a smaller PNG or increase the upload limit.', 'limitless-artwork-analyzer' ),
+					__( 'The selected PNG is too large for the server upload limit. The plugin upload limit is %s, but LocalWP/PHP may be lower.', 'limitless-artwork-analyzer' ),
 					size_format( $max_upload_size )
 				);
 			case UPLOAD_ERR_PARTIAL:
@@ -413,14 +478,14 @@ class LAA_Ajax_Handler {
 	 */
 	private function get_upload_error_status( $error_code ) {
 		if ( UPLOAD_ERR_INI_SIZE === $error_code || UPLOAD_ERR_FORM_SIZE === $error_code ) {
-			return 413;
+			return 200;
 		}
 
 		if ( UPLOAD_ERR_NO_TMP_DIR === $error_code || UPLOAD_ERR_CANT_WRITE === $error_code || UPLOAD_ERR_EXTENSION === $error_code ) {
-			return 500;
+			return 200;
 		}
 
-		return 400;
+		return 200;
 	}
 
 	/**
@@ -429,7 +494,7 @@ class LAA_Ajax_Handler {
 	 * @param WP_Error $error  Error object.
 	 * @param int      $status HTTP status.
 	 */
-	private function send_wp_error( $error, $status = 400 ) {
+	private function send_wp_error( $error, $status = 200 ) {
 		$data = $error->get_error_data();
 
 		$this->send_error(
@@ -452,10 +517,11 @@ class LAA_Ajax_Handler {
 		$data = is_array( $data ) ? $data : array();
 
 		$data['file_name'] = $original_file_name;
+		$message           = __( 'This PNG could not be analyzed. It may be corrupted, too large, or saved in an unsupported PNG format.', 'limitless-artwork-analyzer' );
 
 		$this->send_error(
-			__( 'This PNG could not be analyzed. It may be corrupted, too large, or saved in an unsupported PNG format.', 'limitless-artwork-analyzer' ),
-			400,
+			$message,
+			200,
 			$error->get_error_code(),
 			$this->get_wp_error_technical_message( $error ),
 			$data
@@ -498,8 +564,11 @@ class LAA_Ajax_Handler {
 	 */
 	private function get_server_limits() {
 		$max_upload_size = wp_max_upload_size();
+		$plugin_limit    = Limitless_Artwork_Analyzer::get_configured_max_upload_bytes();
 
 		return array(
+			'plugin_max_upload_size'  => size_format( $plugin_limit ),
+			'plugin_max_upload_bytes' => $plugin_limit,
 			'wp_max_upload_size'       => size_format( $max_upload_size ),
 			'wp_max_upload_size_bytes' => $max_upload_size,
 			'upload_max_filesize'      => ini_get( 'upload_max_filesize' ),
@@ -519,6 +588,8 @@ class LAA_Ajax_Handler {
 	 * @param array  $context           Extra debugging context.
 	 */
 	private function send_error( $message, $status = 400, $code = 'laa_upload_failed', $technical_message = '', $context = array() ) {
+		$status = 200;
+
 		$this->log_technical_error(
 			$code,
 			array(
@@ -526,6 +597,15 @@ class LAA_Ajax_Handler {
 				'technical_message' => $technical_message,
 				'status'            => $status,
 				'context'           => $context,
+			)
+		);
+
+		$this->log_step(
+			'response returned',
+			array(
+				'type'    => 'error',
+				'code'    => $code,
+				'message' => wp_strip_all_tags( $message ),
 			)
 		);
 
@@ -537,6 +617,8 @@ class LAA_Ajax_Handler {
 				'context'          => $context,
 			),
 		);
+
+		$this->response_sent = true;
 
 		wp_send_json_error(
 			$response,
@@ -560,5 +642,98 @@ class LAA_Ajax_Handler {
 		}
 
 		error_log( '[Limitless Artwork Analyzer] ' . $code . ' ' . $log_context );
+	}
+
+	/**
+	 * Log a major AJAX processing step.
+	 *
+	 * @param string $step    Step name.
+	 * @param array  $context Extra context.
+	 */
+	private function log_step( $step, $context = array() ) {
+		$context['request_id'] = $this->request_id;
+		$log_context           = wp_json_encode( $context );
+
+		if ( false === $log_context ) {
+			$log_context = 'Unable to JSON encode step context.';
+		}
+
+		error_log( '[Limitless Artwork Analyzer] step: ' . $step . ' ' . $log_context );
+	}
+
+	/**
+	 * Last-resort fatal error logger/JSON responder for this AJAX endpoint.
+	 */
+	public function handle_fatal_shutdown() {
+		if ( $this->response_sent ) {
+			return;
+		}
+
+		$error = error_get_last();
+
+		if ( empty( $error ) || ! $this->is_fatal_error_type( (int) $error['type'] ) ) {
+			return;
+		}
+
+		$this->log_technical_error(
+			'laa_fatal_shutdown',
+			array(
+				'customer_message'  => __( 'The upload failed while processing the PNG. Please try a smaller PNG or contact us.', 'limitless-artwork-analyzer' ),
+				'technical_message' => isset( $error['message'] ) ? $error['message'] : '',
+				'status'            => 200,
+				'context'           => array(
+					'file'       => isset( $error['file'] ) ? $error['file'] : '',
+					'line'       => isset( $error['line'] ) ? $error['line'] : 0,
+					'type'       => isset( $error['type'] ) ? $error['type'] : 0,
+					'request_id' => $this->request_id,
+				),
+			)
+		);
+
+		if ( ! headers_sent() ) {
+			status_header( 200 );
+			nocache_headers();
+		}
+
+		while ( ob_get_level() > 0 ) {
+			ob_end_clean();
+		}
+
+		$this->log_step(
+			'response returned',
+			array(
+				'type' => 'fatal_error',
+				'code' => 'laa_fatal_shutdown',
+			)
+		);
+
+		$this->response_sent = true;
+
+		wp_send_json_error(
+			array(
+				'message' => __( 'The upload failed while processing the PNG. Please try a smaller PNG or contact us.', 'limitless-artwork-analyzer' ),
+				'code'    => 'laa_fatal_shutdown',
+				'debug'   => array(
+					'technicalMessage' => isset( $error['message'] ) ? $error['message'] : '',
+					'context'          => array(
+						'file'       => isset( $error['file'] ) ? $error['file'] : '',
+						'line'       => isset( $error['line'] ) ? $error['line'] : 0,
+						'type'       => isset( $error['type'] ) ? $error['type'] : 0,
+						'request_id' => $this->request_id,
+					),
+				),
+			),
+			200
+		);
+	}
+
+	/**
+	 * Check whether a PHP error type is fatal.
+	 *
+	 * @param int $type Error type.
+	 * @return bool
+	 */
+	private function is_fatal_error_type( $type ) {
+		return in_array( $type, array( E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR, E_RECOVERABLE_ERROR ), true );
 	}
 }

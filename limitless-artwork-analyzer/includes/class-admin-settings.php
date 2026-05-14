@@ -92,6 +92,12 @@ class LAA_Admin_Settings {
 		);
 
 		$number_fields = array(
+			'max_upload_size_mb'               => array(
+				'label'       => __( 'Max Upload File Size in MB', 'limitless-artwork-analyzer' ),
+				'step'        => '1',
+				'min'         => '1',
+				'description' => __( 'Default: 200. This is the plugin limit; PHP/LocalWP upload limits must also allow this size.', 'limitless-artwork-analyzer' ),
+			),
 			'min_dimension_inches'             => array(
 				'label'       => __( 'Minimum Required Dimension in Inches', 'limitless-artwork-analyzer' ),
 				'step'        => '0.1',
@@ -106,6 +112,18 @@ class LAA_Admin_Settings {
 				'label'       => __( 'Long PNG Warning Threshold in Inches', 'limitless-artwork-analyzer' ),
 				'step'        => '0.1',
 				'description' => __( 'Default: 100. Files longer than this show a cleanup-tool warning.', 'limitless-artwork-analyzer' ),
+			),
+			'max_full_scan_pixels'             => array(
+				'label'       => __( 'Max Pixel Count for Full Scan', 'limitless-artwork-analyzer' ),
+				'step'        => '1',
+				'min'         => '1',
+				'description' => __( 'Default: 50000000. Images at or below this pixel count can use a full transparency scan when memory allows.', 'limitless-artwork-analyzer' ),
+			),
+			'max_sampled_scan_pixels'          => array(
+				'label'       => __( 'Max Pixel Count for Sampled Scan', 'limitless-artwork-analyzer' ),
+				'step'        => '1',
+				'min'         => '1',
+				'description' => __( 'Default: 250000000. Images above the full scan limit and at or below this limit use sampled transparency checks when memory allows.', 'limitless-artwork-analyzer' ),
 			),
 			'semi_transparent_alpha_threshold' => array(
 				'label'       => __( 'Semi-Transparent Pixel Alpha Threshold', 'limitless-artwork-analyzer' ),
@@ -179,9 +197,12 @@ class LAA_Admin_Settings {
 		$output['enabled']     = isset( $input['enabled'] ) && 'yes' === $input['enabled'] ? 'yes' : 'no';
 		$output['product_ids'] = $this->sanitize_product_ids( isset( $input['product_ids'] ) ? $input['product_ids'] : '' );
 
+		$output['max_upload_size_mb']               = $this->sanitize_float( $input, 'max_upload_size_mb', $defaults['max_upload_size_mb'], 1 );
 		$output['min_dimension_inches']             = $this->sanitize_float( $input, 'min_dimension_inches', $defaults['min_dimension_inches'] );
 		$output['max_print_width_inches']           = $this->sanitize_float( $input, 'max_print_width_inches', $defaults['max_print_width_inches'] );
 		$output['long_png_warning_inches']          = $this->sanitize_float( $input, 'long_png_warning_inches', $defaults['long_png_warning_inches'] );
+		$output['max_full_scan_pixels']             = $this->sanitize_int( $input, 'max_full_scan_pixels', $defaults['max_full_scan_pixels'], 1 );
+		$output['max_sampled_scan_pixels']          = $this->sanitize_int( $input, 'max_sampled_scan_pixels', $defaults['max_sampled_scan_pixels'], 1 );
 		$output['semi_transparent_alpha_threshold'] = $this->sanitize_int( $input, 'semi_transparent_alpha_threshold', $defaults['semi_transparent_alpha_threshold'], 1, 255 );
 		$output['poor_dpi_threshold']               = $this->sanitize_int( $input, 'poor_dpi_threshold', $defaults['poor_dpi_threshold'], 1 );
 		$output['fair_dpi_min']                     = $this->sanitize_int( $input, 'fair_dpi_min', $defaults['fair_dpi_min'], 1 );
@@ -200,6 +221,10 @@ class LAA_Admin_Settings {
 			$temp                   = $output['good_dpi_min'];
 			$output['good_dpi_min'] = $output['good_dpi_max'];
 			$output['good_dpi_max'] = $temp;
+		}
+
+		if ( $output['max_full_scan_pixels'] > $output['max_sampled_scan_pixels'] ) {
+			$output['max_sampled_scan_pixels'] = $output['max_full_scan_pixels'];
 		}
 
 		return $output;
@@ -311,7 +336,7 @@ class LAA_Admin_Settings {
 	 * @param float  $default Default value.
 	 * @return float
 	 */
-	private function sanitize_float( $input, $key, $default ) {
+	private function sanitize_float( $input, $key, $default, $min = 0 ) {
 		if ( ! isset( $input[ $key ] ) || '' === $input[ $key ] || is_array( $input[ $key ] ) ) {
 			return $default;
 		}
@@ -319,7 +344,7 @@ class LAA_Admin_Settings {
 		$value = sanitize_text_field( wp_unslash( $input[ $key ] ) );
 		$value = (float) str_replace( ',', '.', $value );
 
-		return max( 0, $value );
+		return max( $min, $value );
 	}
 
 	/**

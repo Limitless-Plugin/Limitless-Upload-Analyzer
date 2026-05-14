@@ -66,15 +66,16 @@ class LAA_Analyzer {
 			);
 		}
 
-		if ( ! function_exists( 'imagecreatefrompng' ) ) {
-			return new WP_Error(
-				'laa_gd_missing',
-				__( 'The PHP GD image library is required to check PNG transparency.', 'limitless-artwork-analyzer' ),
-				array(
-					'technical_message' => 'imagecreatefrompng() is not available. The PHP GD extension may be missing or disabled.',
-				)
-			);
-		}
+		$this->log_step(
+			'image info read',
+			array(
+				'file_path'    => $file_path,
+				'image_width'  => isset( $image_size[0] ) ? (int) $image_size[0] : 0,
+				'image_height' => isset( $image_size[1] ) ? (int) $image_size[1] : 0,
+				'image_type'   => isset( $image_size[2] ) ? (int) $image_size[2] : 0,
+				'mime'         => isset( $image_size['mime'] ) ? $image_size['mime'] : '',
+			)
+		);
 
 		$pixel_width  = (int) $image_size[0];
 		$pixel_height = (int) $image_size[1];
@@ -89,6 +90,9 @@ class LAA_Analyzer {
 				)
 			);
 		}
+
+		$pixel_count = $pixel_width * $pixel_height;
+		$scan_plan   = $this->get_scan_plan( $pixel_count, $settings );
 
 		$dpi_data      = $this->read_png_dpi( $file_path );
 		$dpi_assumed   = false;
@@ -109,24 +113,41 @@ class LAA_Analyzer {
 		$width_inches  = round( $pixel_width / $dpi_x, 2 );
 		$height_inches = round( $pixel_height / $dpi_y, 2 );
 		$quality       = $this->get_quality_rating( $dpi_used, $settings );
+		$warnings      = array();
+		$skipped_checks = array();
+		$skip_reason    = '';
+		$transparency   = $this->get_skipped_transparency_result();
 
-		$image = @imagecreatefrompng( $file_path );
+		if ( 'skipped' === $scan_plan['mode'] ) {
+			$warnings[]      = __( 'This PNG uploaded successfully, but it is too large to fully analyze in this local test environment.', 'limitless-artwork-analyzer' );
+			$skipped_checks  = $this->get_transparency_check_names();
+			$skip_reason     = __( 'File pixel count exceeds the sampled scan limit.', 'limitless-artwork-analyzer' );
+			$transparency    = $this->get_skipped_transparency_result( $skipped_checks, $skip_reason );
+			$this->log_skipped_sampling( $pixel_width, $pixel_height, $scan_plan, $skipped_checks, $skip_reason );
+		} else {
+			$scan_skip = $this->get_scan_skip_reason( $pixel_width, $pixel_height );
 
-		if ( ! $image ) {
-			return new WP_Error(
-				'laa_corrupt_png',
-				__( 'The PNG appears to be corrupt or could not be opened.', 'limitless-artwork-analyzer' ),
-				array(
-					'technical_message' => 'imagecreatefrompng() returned false. ' . $this->get_last_php_error_message(),
-					'file_path'         => $file_path,
-					'pixel_width'       => $pixel_width,
-					'pixel_height'      => $pixel_height,
-				)
-			);
+			if ( '' !== $scan_skip ) {
+				$warnings[]      = $scan_skip;
+				$skipped_checks  = $this->get_transparency_check_names();
+				$skip_reason     = $scan_skip;
+				$transparency    = $this->get_skipped_transparency_result( $skipped_checks, $skip_reason );
+				$this->log_skipped_sampling( $pixel_width, $pixel_height, $scan_plan, $skipped_checks, $skip_reason );
+			} else {
+				$image = @imagecreatefrompng( $file_path );
+
+				if ( ! $image ) {
+					$warnings[]      = __( 'Transparency checks were skipped because this PNG could not be opened for pixel analysis.', 'limitless-artwork-analyzer' );
+					$skipped_checks  = $this->get_transparency_check_names();
+					$skip_reason     = 'imagecreatefrompng() returned false. ' . $this->get_last_php_error_message();
+					$transparency    = $this->get_skipped_transparency_result( $skipped_checks, $skip_reason );
+					$this->log_skipped_sampling( $pixel_width, $pixel_height, $scan_plan, $skipped_checks, $skip_reason );
+				} else {
+					$transparency = $this->inspect_transparency( $image, $pixel_width, $pixel_height, (int) $settings['semi_transparent_alpha_threshold'], $scan_plan );
+					imagedestroy( $image );
+				}
+			}
 		}
-
-		$transparency = $this->inspect_transparency( $image, $pixel_width, $pixel_height, (int) $settings['semi_transparent_alpha_threshold'] );
-		imagedestroy( $image );
 
 		$dimension_warning = ! $this->has_dimension_between(
 			$width_inches,
@@ -135,7 +156,6 @@ class LAA_Analyzer {
 			(float) $settings['max_print_width_inches']
 		);
 		$long_file_warning = $width_inches > (float) $settings['long_png_warning_inches'] || $height_inches > (float) $settings['long_png_warning_inches'];
-		$warnings          = array();
 
 		if ( $dimension_warning ) {
 			$warnings[] = sprintf(
@@ -158,7 +178,7 @@ class LAA_Analyzer {
 			$warnings[] = __( 'Semi-transparent pixels were detected. These can sometimes create unexpected results with DTF printing, especially around fades, shadows, and soft edges.', 'limitless-artwork-analyzer' );
 		}
 
-		if ( ! $transparency['transparent_background'] ) {
+		if ( false === $transparency['transparent_background'] ) {
 			$warnings[] = __( 'A transparent background was not detected around the artwork edges. Please make sure the PNG is saved with transparency.', 'limitless-artwork-analyzer' );
 		}
 
@@ -166,6 +186,7 @@ class LAA_Analyzer {
 			'original_file_name'                  => sanitize_file_name( $original_file_name ),
 			'pixel_width'                         => $pixel_width,
 			'pixel_height'                        => $pixel_height,
+			'pixel_count'                         => $pixel_count,
 			'dpi_used'                            => $dpi_used,
 			'dpi_x'                               => round( $dpi_x, 2 ),
 			'dpi_y'                               => round( $dpi_y, 2 ),
@@ -174,6 +195,10 @@ class LAA_Analyzer {
 			'width_inches'                        => $width_inches,
 			'height_inches'                       => $height_inches,
 			'quality_rating'                      => $quality,
+			'scan_mode'                           => $scan_plan['mode'],
+			'scan_mode_label'                     => $scan_plan['label'],
+			'skipped_checks'                      => $skipped_checks,
+			'skipped_check_reason'                => $skip_reason,
 			'has_transparency'                    => $transparency['has_transparency'],
 			'transparent_background'              => $transparency['transparent_background'],
 			'transparent_background_ratio'        => $transparency['transparent_background_ratio'],
@@ -258,11 +283,22 @@ class LAA_Analyzer {
 	 * @param int             $alpha_threshold Semi-transparent threshold.
 	 * @return array
 	 */
-	private function inspect_transparency( $image, $width, $height, $alpha_threshold ) {
-		$step                      = $this->get_sampling_step( $width, $height );
+	private function inspect_transparency( $image, $width, $height, $alpha_threshold, $scan_plan ) {
+		$step                      = $this->get_sampling_step( $width, $height, $scan_plan['mode'] );
 		$sampled_count             = 0;
 		$has_transparency          = false;
 		$semi_transparent_detected = false;
+
+		$this->log_step(
+			'pixel sampling started',
+			array(
+				'pixel_width'     => $width,
+				'pixel_height'    => $height,
+				'scan_mode'       => $scan_plan['mode'],
+				'sampling_step'   => $step,
+				'alpha_threshold' => $alpha_threshold,
+			)
+		);
 
 		for ( $y = 0; $y < $height; $y += $step ) {
 			for ( $x = 0; $x < $width; $x += $step ) {
@@ -284,14 +320,26 @@ class LAA_Analyzer {
 		}
 
 		$edge_result = $this->inspect_edges_for_transparency( $image, $width, $height );
-
-		return array(
+		$result      = array(
 			'has_transparency'                 => $has_transparency || $edge_result['has_transparency'],
 			'transparent_background'           => $edge_result['transparent_background'],
 			'transparent_background_ratio'     => $edge_result['transparent_background_ratio'],
 			'semi_transparent_pixels_detected' => $semi_transparent_detected,
 			'sampled_pixel_count'              => $sampled_count + $edge_result['sampled_pixel_count'],
 		);
+
+		$this->log_step(
+			'pixel sampling completed',
+			array(
+				'sampled_pixel_count'              => $result['sampled_pixel_count'],
+				'scan_mode'                        => $scan_plan['mode'],
+				'has_transparency'                 => $result['has_transparency'],
+				'transparent_background'           => $result['transparent_background'],
+				'semi_transparent_pixels_detected' => $result['semi_transparent_pixels_detected'],
+			)
+		);
+
+		return $result;
 	}
 
 	/**
@@ -368,7 +416,11 @@ class LAA_Analyzer {
 	 * @param int $height Pixel height.
 	 * @return int
 	 */
-	private function get_sampling_step( $width, $height ) {
+	private function get_sampling_step( $width, $height, $scan_mode ) {
+		if ( 'full' === $scan_mode ) {
+			return 1;
+		}
+
 		$total_pixels = max( 1, $width * $height );
 
 		if ( $total_pixels <= $this->max_samples ) {
@@ -456,6 +508,234 @@ class LAA_Analyzer {
 	}
 
 	/**
+	 * Decide how deeply to scan the image based on pixel count settings.
+	 *
+	 * @param int   $pixel_count Pixel count.
+	 * @param array $settings    Plugin settings.
+	 * @return array
+	 */
+	private function get_scan_plan( $pixel_count, $settings ) {
+		$full_limit    = isset( $settings['max_full_scan_pixels'] ) ? max( 1, absint( $settings['max_full_scan_pixels'] ) ) : 50000000;
+		$sampled_limit = isset( $settings['max_sampled_scan_pixels'] ) ? max( 1, absint( $settings['max_sampled_scan_pixels'] ) ) : 250000000;
+
+		if ( $sampled_limit < $full_limit ) {
+			$sampled_limit = $full_limit;
+		}
+
+		if ( $pixel_count <= $full_limit ) {
+			return array(
+				'mode'          => 'full',
+				'label'         => __( 'Full scan', 'limitless-artwork-analyzer' ),
+				'full_limit'    => $full_limit,
+				'sampled_limit' => $sampled_limit,
+			);
+		}
+
+		if ( $pixel_count <= $sampled_limit ) {
+			return array(
+				'mode'          => 'sampled',
+				'label'         => __( 'Sampled scan', 'limitless-artwork-analyzer' ),
+				'full_limit'    => $full_limit,
+				'sampled_limit' => $sampled_limit,
+			);
+		}
+
+		return array(
+			'mode'          => 'skipped',
+			'label'         => __( 'Basic dimensions only', 'limitless-artwork-analyzer' ),
+			'full_limit'    => $full_limit,
+			'sampled_limit' => $sampled_limit,
+		);
+	}
+
+	/**
+	 * Names of expensive checks that require opening the PNG pixel data.
+	 *
+	 * @return array
+	 */
+	private function get_transparency_check_names() {
+		return array(
+			__( 'Transparent background check', 'limitless-artwork-analyzer' ),
+			__( 'Semi-transparent pixel check', 'limitless-artwork-analyzer' ),
+		);
+	}
+
+	/**
+	 * Build a consistent transparency result when pixel checks are skipped.
+	 *
+	 * @param array  $skipped_checks Skipped check names.
+	 * @param string $reason         Skip reason.
+	 * @return array
+	 */
+	private function get_skipped_transparency_result( $skipped_checks = array(), $reason = '' ) {
+		return array(
+			'has_transparency'                 => null,
+			'transparent_background'           => null,
+			'transparent_background_ratio'     => null,
+			'semi_transparent_pixels_detected' => null,
+			'sampled_pixel_count'              => 0,
+			'skipped_checks'                   => $skipped_checks,
+			'skipped_check_reason'             => $reason,
+		);
+	}
+
+	/**
+	 * Decide whether the server can safely open the PNG for pixel checks.
+	 *
+	 * @param int $width  Pixel width.
+	 * @param int $height Pixel height.
+	 * @return string Empty when scanning can proceed, otherwise customer-facing skip reason.
+	 */
+	private function get_scan_skip_reason( $width, $height ) {
+		if ( ! extension_loaded( 'gd' ) ) {
+			return __( 'Transparency checks were skipped because PHP GD is not available in this local environment.', 'limitless-artwork-analyzer' );
+		}
+
+		if ( ! function_exists( 'imagecreatefrompng' ) ) {
+			return __( 'Transparency checks were skipped because PNG pixel analysis is not available in this local environment.', 'limitless-artwork-analyzer' );
+		}
+
+		$memory_check = $this->check_image_memory_safety( $width, $height );
+
+		if ( is_wp_error( $memory_check ) ) {
+			return __( 'Transparency checks were skipped because this PNG is too large for this local test environment to scan safely.', 'limitless-artwork-analyzer' );
+		}
+
+		return '';
+	}
+
+	/**
+	 * Log skipped sampling with the same start/completed milestones as real scans.
+	 *
+	 * @param int    $width          Pixel width.
+	 * @param int    $height         Pixel height.
+	 * @param array  $scan_plan      Scan plan.
+	 * @param array  $skipped_checks Skipped checks.
+	 * @param string $reason         Skip reason.
+	 */
+	private function log_skipped_sampling( $width, $height, $scan_plan, $skipped_checks, $reason ) {
+		$this->log_step(
+			'pixel sampling started',
+			array(
+				'pixel_width'    => $width,
+				'pixel_height'   => $height,
+				'scan_mode'      => $scan_plan['mode'],
+				'will_skip_scan' => true,
+				'reason'         => $reason,
+			)
+		);
+
+		$this->log_step(
+			'pixel sampling completed',
+			array(
+				'scan_mode'           => $scan_plan['mode'],
+				'sampled_pixel_count' => 0,
+				'skipped_checks'      => $skipped_checks,
+				'reason'              => $reason,
+			)
+		);
+	}
+
+	/**
+	 * Check whether GD can safely expand this PNG into memory.
+	 *
+	 * Compressed PNG files can be small on disk but very large once GD opens
+	 * them. This preflight prevents common LocalWP memory-limit crashes.
+	 *
+	 * @param int $width  Pixel width.
+	 * @param int $height Pixel height.
+	 * @return true|WP_Error
+	 */
+	private function check_image_memory_safety( $width, $height ) {
+		$memory_limit_bytes = $this->parse_size_to_bytes( ini_get( 'memory_limit' ) );
+
+		if ( $memory_limit_bytes < 0 ) {
+			return true;
+		}
+
+		if ( $memory_limit_bytes <= 0 ) {
+			return true;
+		}
+
+		$current_usage_bytes = memory_get_usage( true );
+		$available_bytes     = max( 0, $memory_limit_bytes - $current_usage_bytes );
+		$estimated_bytes     = $this->estimate_gd_memory_bytes( $width, $height );
+		$safe_available      = (int) floor( $available_bytes * 0.7 );
+
+		if ( $estimated_bytes > $safe_available ) {
+			return new WP_Error(
+				'laa_image_too_large_for_memory',
+				__( 'Transparency checks were skipped because this PNG is too large for this local test environment to scan safely.', 'limitless-artwork-analyzer' ),
+				array(
+					'technical_message'     => 'Estimated GD memory usage is higher than the safety-adjusted available PHP memory.',
+					'pixel_width'           => $width,
+					'pixel_height'          => $height,
+					'estimated_bytes'       => $estimated_bytes,
+					'memory_limit_bytes'    => $memory_limit_bytes,
+					'current_usage_bytes'   => $current_usage_bytes,
+					'available_bytes'       => $available_bytes,
+					'safe_available_bytes'  => $safe_available,
+					'php_memory_limit'      => ini_get( 'memory_limit' ),
+				)
+			);
+		}
+
+		return true;
+	}
+
+	/**
+	 * Estimate memory needed for GD to decode and inspect the PNG.
+	 *
+	 * @param int $width  Pixel width.
+	 * @param int $height Pixel height.
+	 * @return int
+	 */
+	private function estimate_gd_memory_bytes( $width, $height ) {
+		$pixels = (float) $width * (float) $height;
+
+		return (int) ceil( ( $pixels * 8 ) + ( 32 * 1024 * 1024 ) );
+	}
+
+	/**
+	 * Convert PHP shorthand sizes like 256M into bytes.
+	 *
+	 * @param string|false $size Size value.
+	 * @return int
+	 */
+	private function parse_size_to_bytes( $size ) {
+		if ( false === $size ) {
+			return 0;
+		}
+
+		$size = trim( (string) $size );
+
+		if ( '-1' === $size ) {
+			return -1;
+		}
+
+		if ( '' === $size ) {
+			return 0;
+		}
+
+		$unit  = strtolower( substr( $size, -1 ) );
+		$value = (float) $size;
+
+		switch ( $unit ) {
+			case 'g':
+				$value *= 1024;
+				// Fall through.
+			case 'm':
+				$value *= 1024;
+				// Fall through.
+			case 'k':
+				$value *= 1024;
+				break;
+		}
+
+		return (int) $value;
+	}
+
+	/**
 	 * Read the most recent PHP error for logging.
 	 *
 	 * @return string
@@ -468,5 +748,21 @@ class LAA_Analyzer {
 		}
 
 		return 'Last PHP error: ' . $error['message'];
+	}
+
+	/**
+	 * Write analyzer step details to the WordPress debug log.
+	 *
+	 * @param string $step    Step name.
+	 * @param array  $context Extra context.
+	 */
+	private function log_step( $step, $context = array() ) {
+		$log_context = wp_json_encode( $context );
+
+		if ( false === $log_context ) {
+			$log_context = 'Unable to JSON encode analyzer step context.';
+		}
+
+		error_log( '[Limitless Artwork Analyzer] step: ' . $step . ' ' . $log_context );
 	}
 }

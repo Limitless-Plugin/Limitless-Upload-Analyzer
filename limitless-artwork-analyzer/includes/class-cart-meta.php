@@ -101,25 +101,39 @@ class LAA_Cart_Meta {
 			'value' => esc_html( $data['quality_rating'] ),
 		);
 
+		if ( ! empty( $data['scan_mode_label'] ) ) {
+			$item_data[] = array(
+				'key'   => __( 'Analysis Mode', 'limitless-artwork-analyzer' ),
+				'value' => esc_html( $data['scan_mode_label'] ),
+			);
+		}
+
 		$item_data[] = array(
 			'key'   => __( 'Transparent Background', 'limitless-artwork-analyzer' ),
-			'value' => esc_html( $this->yes_no( ! empty( $data['transparent_background'] ) ) ),
+			'value' => esc_html( $this->yes_no( array_key_exists( 'transparent_background', $data ) ? $data['transparent_background'] : null ) ),
 		);
 
 		$item_data[] = array(
 			'key'   => __( 'Has Transparency', 'limitless-artwork-analyzer' ),
-			'value' => esc_html( $this->yes_no( ! empty( $data['has_transparency'] ) ) ),
+			'value' => esc_html( $this->yes_no( array_key_exists( 'has_transparency', $data ) ? $data['has_transparency'] : null ) ),
 		);
 
 		$item_data[] = array(
 			'key'   => __( 'Semi-Transparent Pixels', 'limitless-artwork-analyzer' ),
-			'value' => esc_html( $this->yes_no( ! empty( $data['semi_transparent_pixels_detected'] ) ) ),
+			'value' => esc_html( $this->yes_no( array_key_exists( 'semi_transparent_pixels_detected', $data ) ? $data['semi_transparent_pixels_detected'] : null ) ),
 		);
 
 		$item_data[] = array(
 			'key'   => __( 'Long File Warning', 'limitless-artwork-analyzer' ),
 			'value' => esc_html( $this->yes_no( ! empty( $data['long_file_warning'] ) ) ),
 		);
+
+		if ( ! empty( $data['skipped_checks'] ) ) {
+			$item_data[] = array(
+				'key'   => __( 'Skipped Checks', 'limitless-artwork-analyzer' ),
+				'value' => esc_html( implode( ', ', $data['skipped_checks'] ) ),
+			);
+		}
 
 		if ( ! empty( $data['file_url'] ) ) {
 			$item_data[] = array(
@@ -159,15 +173,21 @@ class LAA_Cart_Meta {
 		$item->add_meta_data( __( 'Artwork Width Inches', 'limitless-artwork-analyzer' ), $data['width_inches'], true );
 		$item->add_meta_data( __( 'Artwork Height Inches', 'limitless-artwork-analyzer' ), $data['height_inches'], true );
 		$item->add_meta_data( __( 'Artwork Quality Rating', 'limitless-artwork-analyzer' ), $data['quality_rating'], true );
-		$item->add_meta_data( __( 'Artwork Has Transparency', 'limitless-artwork-analyzer' ), $this->yes_no( ! empty( $data['has_transparency'] ) ), true );
-		$item->add_meta_data( __( 'Artwork Transparent Background', 'limitless-artwork-analyzer' ), $this->yes_no( ! empty( $data['transparent_background'] ) ), true );
-		$item->add_meta_data( __( 'Artwork Semi-Transparent Pixels', 'limitless-artwork-analyzer' ), $this->yes_no( ! empty( $data['semi_transparent_pixels_detected'] ) ), true );
+		$item->add_meta_data( __( 'Artwork Analysis Mode', 'limitless-artwork-analyzer' ), isset( $data['scan_mode_label'] ) ? $data['scan_mode_label'] : '', true );
+		$item->add_meta_data( __( 'Artwork Has Transparency', 'limitless-artwork-analyzer' ), $this->yes_no( array_key_exists( 'has_transparency', $data ) ? $data['has_transparency'] : null ), true );
+		$item->add_meta_data( __( 'Artwork Transparent Background', 'limitless-artwork-analyzer' ), $this->yes_no( array_key_exists( 'transparent_background', $data ) ? $data['transparent_background'] : null ), true );
+		$item->add_meta_data( __( 'Artwork Semi-Transparent Pixels', 'limitless-artwork-analyzer' ), $this->yes_no( array_key_exists( 'semi_transparent_pixels_detected', $data ) ? $data['semi_transparent_pixels_detected'] : null ), true );
 		$item->add_meta_data( __( 'Artwork Long File Warning', 'limitless-artwork-analyzer' ), $this->yes_no( ! empty( $data['long_file_warning'] ) ), true );
 		$item->add_meta_data( __( 'Artwork File URL', 'limitless-artwork-analyzer' ), $data['file_url'], true );
 		$item->add_meta_data( __( 'Artwork File Path', 'limitless-artwork-analyzer' ), $data['file_path'], true );
 
 		if ( ! empty( $data['warnings'] ) ) {
 			$item->add_meta_data( __( 'Artwork Warnings', 'limitless-artwork-analyzer' ), implode( ' | ', $data['warnings'] ), true );
+		}
+
+		if ( ! empty( $data['skipped_checks'] ) ) {
+			$item->add_meta_data( __( 'Artwork Skipped Checks', 'limitless-artwork-analyzer' ), implode( ' | ', $data['skipped_checks'] ), true );
+			$item->add_meta_data( __( 'Artwork Skipped Check Reason', 'limitless-artwork-analyzer' ), $data['skipped_check_reason'], true );
 		}
 	}
 
@@ -186,18 +206,31 @@ class LAA_Cart_Meta {
 			}
 		}
 
+		$skipped_checks = array();
+
+		if ( ! empty( $analysis['skipped_checks'] ) && is_array( $analysis['skipped_checks'] ) ) {
+			foreach ( $analysis['skipped_checks'] as $skipped_check ) {
+				$skipped_checks[] = sanitize_text_field( $skipped_check );
+			}
+		}
+
 		return array(
 			'original_file_name'               => sanitize_file_name( $analysis['original_file_name'] ),
 			'pixel_width'                      => isset( $analysis['pixel_width'] ) ? absint( $analysis['pixel_width'] ) : 0,
 			'pixel_height'                     => isset( $analysis['pixel_height'] ) ? absint( $analysis['pixel_height'] ) : 0,
+			'pixel_count'                      => isset( $analysis['pixel_count'] ) ? absint( $analysis['pixel_count'] ) : 0,
 			'dpi_used'                         => isset( $analysis['dpi_used'] ) ? (float) $analysis['dpi_used'] : 0,
 			'dpi_assumed'                      => ! empty( $analysis['dpi_assumed'] ),
 			'width_inches'                     => isset( $analysis['width_inches'] ) ? (float) $analysis['width_inches'] : 0,
 			'height_inches'                    => isset( $analysis['height_inches'] ) ? (float) $analysis['height_inches'] : 0,
 			'quality_rating'                   => isset( $analysis['quality_rating'] ) ? sanitize_text_field( $analysis['quality_rating'] ) : '',
-			'has_transparency'                 => ! empty( $analysis['has_transparency'] ),
-			'transparent_background'           => ! empty( $analysis['transparent_background'] ),
-			'semi_transparent_pixels_detected' => ! empty( $analysis['semi_transparent_pixels_detected'] ),
+			'scan_mode'                        => isset( $analysis['scan_mode'] ) ? sanitize_text_field( $analysis['scan_mode'] ) : '',
+			'scan_mode_label'                  => isset( $analysis['scan_mode_label'] ) ? sanitize_text_field( $analysis['scan_mode_label'] ) : '',
+			'skipped_checks'                   => $skipped_checks,
+			'skipped_check_reason'             => isset( $analysis['skipped_check_reason'] ) ? sanitize_text_field( $analysis['skipped_check_reason'] ) : '',
+			'has_transparency'                 => $this->normalize_nullable_bool( $analysis, 'has_transparency' ),
+			'transparent_background'           => $this->normalize_nullable_bool( $analysis, 'transparent_background' ),
+			'semi_transparent_pixels_detected' => $this->normalize_nullable_bool( $analysis, 'semi_transparent_pixels_detected' ),
 			'long_file_warning'                => ! empty( $analysis['long_file_warning'] ),
 			'file_url'                         => isset( $analysis['file_url'] ) ? esc_url_raw( $analysis['file_url'] ) : '',
 			'file_path'                        => isset( $analysis['file_path'] ) ? sanitize_text_field( $analysis['file_path'] ) : '',
@@ -212,6 +245,25 @@ class LAA_Cart_Meta {
 	 * @return string
 	 */
 	private function yes_no( $value ) {
+		if ( null === $value ) {
+			return __( 'Skipped', 'limitless-artwork-analyzer' );
+		}
+
 		return $value ? __( 'Yes', 'limitless-artwork-analyzer' ) : __( 'No', 'limitless-artwork-analyzer' );
+	}
+
+	/**
+	 * Preserve skipped check values as null instead of converting them to false.
+	 *
+	 * @param array  $analysis Analysis data.
+	 * @param string $key      Analysis key.
+	 * @return bool|null
+	 */
+	private function normalize_nullable_bool( $analysis, $key ) {
+		if ( ! array_key_exists( $key, $analysis ) || null === $analysis[ $key ] ) {
+			return null;
+		}
+
+		return ! empty( $analysis[ $key ] );
 	}
 }

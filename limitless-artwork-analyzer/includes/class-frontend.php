@@ -35,6 +35,8 @@ class LAA_Frontend {
 			return;
 		}
 
+		$configured_max_upload_bytes = Limitless_Artwork_Analyzer::get_configured_max_upload_bytes();
+
 		wp_enqueue_style(
 			'laa-analyzer',
 			LAA_PLUGIN_URL . 'assets/css/analyzer.css',
@@ -57,12 +59,12 @@ class LAA_Frontend {
 				'ajaxUrl'        => admin_url( 'admin-ajax.php' ),
 				'nonce'          => wp_create_nonce( 'laa_analyze_artwork' ),
 				'productId'      => absint( $product_id ),
-				'maxUploadBytes' => wp_max_upload_size(),
-				'maxUploadLabel' => size_format( wp_max_upload_size() ),
+				'maxUploadBytes' => $configured_max_upload_bytes,
+				'maxUploadLabel' => size_format( $configured_max_upload_bytes ),
 				'i18n'           => array(
 					'choosePng'       => __( 'Please choose a PNG file.', 'limitless-artwork-analyzer' ),
 					'pngOnly'         => __( 'Only PNG files are supported for V1.', 'limitless-artwork-analyzer' ),
-					'tooLarge'        => __( 'This file is larger than the current upload limit.', 'limitless-artwork-analyzer' ),
+					'tooLarge'        => __( 'This file is larger than the configured PNG upload limit.', 'limitless-artwork-analyzer' ),
 					'analyzing'       => __( 'Uploading and analyzing your PNG...', 'limitless-artwork-analyzer' ),
 					'ready'           => __( 'Artwork analysis complete.', 'limitless-artwork-analyzer' ),
 					'uploadFailed'    => __( 'The upload failed. Please try again.', 'limitless-artwork-analyzer' ),

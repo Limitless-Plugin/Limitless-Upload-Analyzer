@@ -3,7 +3,7 @@ Contributors: limitless
 Tags: woocommerce, artwork, png, upload, dpi
 Requires at least: 6.0
 Requires PHP: 7.4
-Stable tag: 1.0.0
+Stable tag: 1.0.2
 License: GPLv2 or later
 
 Adds a PNG artwork upload and analyzer box to selected WooCommerce product pages.
