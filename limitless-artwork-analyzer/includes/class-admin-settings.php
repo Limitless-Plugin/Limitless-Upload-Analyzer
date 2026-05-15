@@ -91,6 +91,14 @@ class LAA_Admin_Settings {
 			'laa_main_section'
 		);
 
+		add_settings_field(
+			'ignore_edge_antialiasing',
+			__( 'Ignore Edge Anti-Aliasing', 'limitless-artwork-analyzer' ),
+			array( $this, 'render_ignore_edge_antialiasing_field' ),
+			$this->page_slug,
+			'laa_main_section'
+		);
+
 		$number_fields = array(
 			'max_upload_size_mb'               => array(
 				'label'       => __( 'Max Upload File Size in MB', 'limitless-artwork-analyzer' ),
@@ -125,12 +133,26 @@ class LAA_Admin_Settings {
 				'min'         => '1',
 				'description' => __( 'Default: 250000000. Images above the full scan limit and at or below this limit use sampled transparency checks when memory allows.', 'limitless-artwork-analyzer' ),
 			),
-			'semi_transparent_alpha_threshold' => array(
-				'label'       => __( 'Semi-Transparent Pixel Alpha Threshold', 'limitless-artwork-analyzer' ),
+			'semi_transparent_alpha_lower_threshold' => array(
+				'label'       => __( 'Semi-Transparent Alpha Lower Threshold', 'limitless-artwork-analyzer' ),
 				'step'        => '1',
-				'min'         => '1',
+				'min'         => '0',
 				'max'         => '255',
-				'description' => __( 'Default: 254. Uses normal PNG alpha where 0 is transparent and 255 is opaque.', 'limitless-artwork-analyzer' ),
+				'description' => __( 'Default: 20. Pixels at or below this opacity are treated as essentially transparent edge pixels.', 'limitless-artwork-analyzer' ),
+			),
+			'semi_transparent_alpha_upper_threshold' => array(
+				'label'       => __( 'Semi-Transparent Alpha Upper Threshold', 'limitless-artwork-analyzer' ),
+				'step'        => '1',
+				'min'         => '0',
+				'max'         => '255',
+				'description' => __( 'Default: 235. Pixels at or above this opacity are treated as essentially opaque anti-aliased edge pixels.', 'limitless-artwork-analyzer' ),
+			),
+			'semi_transparent_pixel_percentage_threshold' => array(
+				'label'       => __( 'Semi-Transparent Pixel Percentage Threshold', 'limitless-artwork-analyzer' ),
+				'step'        => '0.01',
+				'min'         => '0',
+				'max'         => '100',
+				'description' => __( 'Default: 0.25. Meaningful semi-transparent pixels must exceed this percentage of analyzed pixels before a warning appears.', 'limitless-artwork-analyzer' ),
 			),
 			'poor_dpi_threshold'               => array(
 				'label'       => __( 'Poor DPI Threshold', 'limitless-artwork-analyzer' ),
@@ -196,6 +218,7 @@ class LAA_Admin_Settings {
 
 		$output['enabled']     = isset( $input['enabled'] ) && 'yes' === $input['enabled'] ? 'yes' : 'no';
 		$output['product_ids'] = $this->sanitize_product_ids( isset( $input['product_ids'] ) ? $input['product_ids'] : '' );
+		$output['ignore_edge_antialiasing'] = isset( $input['ignore_edge_antialiasing'] ) && 'yes' === $input['ignore_edge_antialiasing'] ? 'yes' : 'no';
 
 		$output['max_upload_size_mb']               = $this->sanitize_float( $input, 'max_upload_size_mb', $defaults['max_upload_size_mb'], 1 );
 		$output['min_dimension_inches']             = $this->sanitize_float( $input, 'min_dimension_inches', $defaults['min_dimension_inches'] );
@@ -203,13 +226,29 @@ class LAA_Admin_Settings {
 		$output['long_png_warning_inches']          = $this->sanitize_float( $input, 'long_png_warning_inches', $defaults['long_png_warning_inches'] );
 		$output['max_full_scan_pixels']             = $this->sanitize_int( $input, 'max_full_scan_pixels', $defaults['max_full_scan_pixels'], 1 );
 		$output['max_sampled_scan_pixels']          = $this->sanitize_int( $input, 'max_sampled_scan_pixels', $defaults['max_sampled_scan_pixels'], 1 );
-		$output['semi_transparent_alpha_threshold'] = $this->sanitize_int( $input, 'semi_transparent_alpha_threshold', $defaults['semi_transparent_alpha_threshold'], 1, 255 );
-		$output['poor_dpi_threshold']               = $this->sanitize_int( $input, 'poor_dpi_threshold', $defaults['poor_dpi_threshold'], 1 );
-		$output['fair_dpi_min']                     = $this->sanitize_int( $input, 'fair_dpi_min', $defaults['fair_dpi_min'], 1 );
-		$output['fair_dpi_max']                     = $this->sanitize_int( $input, 'fair_dpi_max', $defaults['fair_dpi_max'], 1 );
-		$output['good_dpi_min']                     = $this->sanitize_int( $input, 'good_dpi_min', $defaults['good_dpi_min'], 1 );
-		$output['good_dpi_max']                     = $this->sanitize_int( $input, 'good_dpi_max', $defaults['good_dpi_max'], 1 );
-		$output['excellent_dpi_threshold']          = $this->sanitize_int( $input, 'excellent_dpi_threshold', $defaults['excellent_dpi_threshold'], 1 );
+		$output['semi_transparent_alpha_lower_threshold']      = $this->sanitize_int( $input, 'semi_transparent_alpha_lower_threshold', $defaults['semi_transparent_alpha_lower_threshold'], 0, 255 );
+		$output['semi_transparent_alpha_upper_threshold']      = $this->sanitize_int( $input, 'semi_transparent_alpha_upper_threshold', $defaults['semi_transparent_alpha_upper_threshold'], 0, 255 );
+		$output['semi_transparent_pixel_percentage_threshold'] = $this->sanitize_float( $input, 'semi_transparent_pixel_percentage_threshold', $defaults['semi_transparent_pixel_percentage_threshold'], 0, 100 );
+		$output['poor_dpi_threshold']                          = $this->sanitize_int( $input, 'poor_dpi_threshold', $defaults['poor_dpi_threshold'], 1 );
+		$output['fair_dpi_min']                                = $this->sanitize_int( $input, 'fair_dpi_min', $defaults['fair_dpi_min'], 1 );
+		$output['fair_dpi_max']                                = $this->sanitize_int( $input, 'fair_dpi_max', $defaults['fair_dpi_max'], 1 );
+		$output['good_dpi_min']                                = $this->sanitize_int( $input, 'good_dpi_min', $defaults['good_dpi_min'], 1 );
+		$output['good_dpi_max']                                = $this->sanitize_int( $input, 'good_dpi_max', $defaults['good_dpi_max'], 1 );
+		$output['excellent_dpi_threshold']                     = $this->sanitize_int( $input, 'excellent_dpi_threshold', $defaults['excellent_dpi_threshold'], 1 );
+
+		if ( $output['semi_transparent_alpha_lower_threshold'] > $output['semi_transparent_alpha_upper_threshold'] ) {
+			$temp                                                = $output['semi_transparent_alpha_lower_threshold'];
+			$output['semi_transparent_alpha_lower_threshold']     = $output['semi_transparent_alpha_upper_threshold'];
+			$output['semi_transparent_alpha_upper_threshold']     = $temp;
+		}
+
+		if ( $output['semi_transparent_alpha_lower_threshold'] === $output['semi_transparent_alpha_upper_threshold'] ) {
+			if ( $output['semi_transparent_alpha_upper_threshold'] < 255 ) {
+				$output['semi_transparent_alpha_upper_threshold']++;
+			} else {
+				$output['semi_transparent_alpha_lower_threshold']--;
+			}
+		}
 
 		if ( $output['fair_dpi_min'] > $output['fair_dpi_max'] ) {
 			$temp                   = $output['fair_dpi_min'];
@@ -280,6 +319,20 @@ class LAA_Admin_Settings {
 	}
 
 	/**
+	 * Render edge anti-aliasing checkbox.
+	 */
+	public function render_ignore_edge_antialiasing_field() {
+		$settings = Limitless_Artwork_Analyzer::get_settings();
+		?>
+		<label>
+			<input type="checkbox" name="<?php echo esc_attr( LAA_OPTION_NAME ); ?>[ignore_edge_antialiasing]" value="yes" <?php checked( 'yes', $settings['ignore_edge_antialiasing'] ); ?> />
+			<?php esc_html_e( 'Do not warn for normal soft pixels along transparent artwork edges.', 'limitless-artwork-analyzer' ); ?>
+		</label>
+		<p class="description"><?php esc_html_e( 'Default: enabled. Interior fades, shadows, glows, and opacity overlays can still trigger the semi-transparent warning.', 'limitless-artwork-analyzer' ); ?></p>
+		<?php
+	}
+
+	/**
 	 * Render a number input.
 	 *
 	 * @param array $args Field args.
@@ -336,15 +389,20 @@ class LAA_Admin_Settings {
 	 * @param float  $default Default value.
 	 * @return float
 	 */
-	private function sanitize_float( $input, $key, $default, $min = 0 ) {
+	private function sanitize_float( $input, $key, $default, $min = 0, $max = null ) {
 		if ( ! isset( $input[ $key ] ) || '' === $input[ $key ] || is_array( $input[ $key ] ) ) {
 			return $default;
 		}
 
 		$value = sanitize_text_field( wp_unslash( $input[ $key ] ) );
 		$value = (float) str_replace( ',', '.', $value );
+		$value = max( $min, $value );
 
-		return max( $min, $value );
+		if ( null !== $max ) {
+			$value = min( $max, $value );
+		}
+
+		return $value;
 	}
 
 	/**

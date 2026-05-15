@@ -17,30 +17,6 @@
 	}
 
 	/**
-	 * Format true/false values for display.
-	 *
-	 * @param {boolean} value Boolean value.
-	 * @return {string}
-	 */
-	function yesNo(value) {
-		return value ? 'Yes' : 'No';
-	}
-
-	/**
-	 * Format a check result that may have been skipped.
-	 *
-	 * @param {boolean|null} value Check value.
-	 * @return {string}
-	 */
-	function checkResult(value) {
-		if (value === null || typeof value === 'undefined') {
-			return 'Skipped';
-		}
-
-		return yesNo(value);
-	}
-
-	/**
 	 * Create one result row.
 	 *
 	 * @param {string} label Result label.
@@ -49,6 +25,78 @@
 	 */
 	function resultRow(label, value) {
 		return '<div class="laa-result-row"><span>' + escapeHtml(label) + '</span><strong>' + escapeHtml(value) + '</strong></div>';
+	}
+
+	/**
+	 * Format the print size for customer-facing summaries.
+	 *
+	 * @param {Object} analysis Analysis response.
+	 * @return {string}
+	 */
+	function formatPrintSize(analysis) {
+		return analysis.width_inches + '″ × ' + analysis.height_inches + '″';
+	}
+
+	/**
+	 * Format DPI for customer-facing summaries.
+	 *
+	 * @param {Object} analysis Analysis response.
+	 * @return {string}
+	 */
+	function formatDpi(analysis) {
+		return analysis.dpi_used + (analysis.dpi_assumed ? ' (assumed)' : '');
+	}
+
+	/**
+	 * Check whether a warning is about skipped internal analysis details.
+	 *
+	 * @param {string} warning Warning text.
+	 * @return {boolean}
+	 */
+	function isSkippedAnalysisWarning(warning) {
+		var normalized = String(warning).toLowerCase();
+
+		return normalized.indexOf('too large to fully analyze') !== -1 ||
+			normalized.indexOf('transparency checks were skipped') !== -1;
+	}
+
+	/**
+	 * Check whether a warning is the semi-transparent pixel message.
+	 *
+	 * @param {string} warning Warning text.
+	 * @return {boolean}
+	 */
+	function isSemiTransparentPixelWarning(warning) {
+		return String(warning).toLowerCase().indexOf('semi-transparent pixels were detected') !== -1;
+	}
+
+	/**
+	 * Build the simplified customer warning list.
+	 *
+	 * @param {Object} analysis Analysis response.
+	 * @return {Array}
+	 */
+	function getCustomerWarnings(analysis) {
+		var sourceWarnings = Array.isArray(analysis.warnings) ? analysis.warnings : [];
+		var warnings = [];
+
+		sourceWarnings.forEach(function (warning) {
+			if (isSemiTransparentPixelWarning(warning) && analysis.semi_transparent_pixels_detected !== true) {
+				return;
+			}
+
+			if (!isSkippedAnalysisWarning(warning)) {
+				warnings.push(warning);
+			}
+		});
+
+		if (Array.isArray(analysis.skipped_checks) && analysis.skipped_checks.length) {
+			warnings.push('This file is very large, so advanced transparency checks were skipped. Basic size and DPI checks were completed.');
+		}
+
+		return warnings.filter(function (warning, index, allWarnings) {
+			return allWarnings.indexOf(warning) === index;
+		});
 	}
 
 	/**
@@ -71,17 +119,13 @@
 	 */
 	function renderResults($results, analysis) {
 		var html = '';
-		var warnings = Array.isArray(analysis.warnings) ? analysis.warnings : [];
+		var warnings = getCustomerWarnings(analysis);
 
 		html += '<div class="laa-result-grid">';
-		html += resultRow('Pixel dimensions', analysis.pixel_width + ' x ' + analysis.pixel_height + ' px');
-		html += resultRow('Print dimensions', analysis.width_inches + '" x ' + analysis.height_inches + '"');
-		html += resultRow('DPI used', analysis.dpi_used + (analysis.dpi_assumed ? ' (assumed)' : ''));
-		html += resultRow('Quality rating', analysis.quality_rating);
-		html += resultRow('Analysis mode', analysis.scan_mode_label || 'Standard scan');
-		html += resultRow('Has transparency', checkResult(analysis.has_transparency));
-		html += resultRow('Transparent background', checkResult(analysis.transparent_background));
-		html += resultRow('Semi-transparent pixels', checkResult(analysis.semi_transparent_pixels_detected));
+		html += resultRow('Artwork File', analysis.original_file_name || 'Uploaded PNG');
+		html += resultRow('Print Size', formatPrintSize(analysis));
+		html += resultRow('DPI', formatDpi(analysis));
+		html += resultRow('Quality', analysis.quality_rating);
 		html += '</div>';
 
 		if (analysis.dpi_message) {
@@ -98,22 +142,6 @@
 			html += '</ul></div>';
 		} else if (analysis.success_message) {
 			html += '<div class="laa-notice laa-notice--success">' + escapeHtml(analysis.success_message) + '</div>';
-		}
-
-		if (Array.isArray(analysis.skipped_checks) && analysis.skipped_checks.length) {
-			html += '<div class="laa-notice laa-notice--info"><strong>Skipped checks</strong><ul>';
-
-			analysis.skipped_checks.forEach(function (check) {
-				html += '<li>' + escapeHtml(check) + '</li>';
-			});
-
-			html += '</ul>';
-
-			if (analysis.skipped_check_reason) {
-				html += '<p>' + escapeHtml(analysis.skipped_check_reason) + '</p>';
-			}
-
-			html += '</div>';
 		}
 
 		$results.html(html).prop('hidden', false);

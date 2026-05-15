@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Limitless Artwork Analyzer
  * Description: Adds a PNG artwork upload and analyzer box to selected WooCommerce product pages.
- * Version: 1.0.2
+ * Version: 1.0.6
  * Author: Limitless
  * Text Domain: limitless-artwork-analyzer
  * Requires PHP: 7.4
@@ -13,7 +13,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'LAA_VERSION', '1.0.2' );
+define( 'LAA_VERSION', '1.0.6' );
 define( 'LAA_PLUGIN_FILE', __FILE__ );
 define( 'LAA_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'LAA_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -104,13 +104,17 @@ final class Limitless_Artwork_Analyzer {
 			'long_png_warning_inches'          => 100,
 			'max_full_scan_pixels'             => 50000000,
 			'max_sampled_scan_pixels'          => 250000000,
-			'semi_transparent_alpha_threshold' => 254,
-			'poor_dpi_threshold'               => 150,
-			'fair_dpi_min'                     => 150,
-			'fair_dpi_max'                     => 224,
-			'good_dpi_min'                     => 225,
-			'good_dpi_max'                     => 299,
-			'excellent_dpi_threshold'          => 300,
+			'semi_transparent_alpha_threshold'            => 254,
+			'semi_transparent_alpha_lower_threshold'      => 20,
+			'semi_transparent_alpha_upper_threshold'      => 235,
+			'semi_transparent_pixel_percentage_threshold' => 0.25,
+			'ignore_edge_antialiasing'                    => 'yes',
+			'poor_dpi_threshold'                          => 150,
+			'fair_dpi_min'                                => 150,
+			'fair_dpi_max'                                => 224,
+			'good_dpi_min'                                => 225,
+			'good_dpi_max'                                => 299,
+			'excellent_dpi_threshold'                     => 300,
 		);
 	}
 

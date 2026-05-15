@@ -3,7 +3,7 @@ Contributors: limitless
 Tags: woocommerce, artwork, png, upload, dpi
 Requires at least: 6.0
 Requires PHP: 7.4
-Stable tag: 1.0.2
+Stable tag: 1.0.6
 License: GPLv2 or later
 
 Adds a PNG artwork upload and analyzer box to selected WooCommerce product pages.
@@ -83,7 +83,7 @@ Analysis behavior:
 * Print size in inches displays.
 * DPI quality rating displays as Poor, Fair, Good, or Excellent.
 * Transparent background result displays.
-* Semi-transparent pixel warning displays when sampled pixels have alpha between 0 and the configured threshold.
+* Semi-transparent pixel warning ignores normal edge anti-aliasing when enabled and displays only when interior semi-transparent pixels exceed the configured percentage threshold.
 * Dimension warning displays when neither dimension is between 19 inches and 22.5 inches.
 * Long file warning displays when either print dimension is over 100 inches.
 * Success message displays when there are no warnings.

@@ -82,18 +82,13 @@ class LAA_Cart_Meta {
 		);
 
 		$item_data[] = array(
-			'key'   => __( 'Pixel Size', 'limitless-artwork-analyzer' ),
-			'value' => esc_html( $data['pixel_width'] . ' x ' . $data['pixel_height'] . ' px' ),
-		);
-
-		$item_data[] = array(
 			'key'   => __( 'Print Size', 'limitless-artwork-analyzer' ),
-			'value' => esc_html( $data['width_inches'] . '" x ' . $data['height_inches'] . '"' ),
+			'value' => esc_html( $this->format_print_size( $data ) ),
 		);
 
 		$item_data[] = array(
-			'key'   => __( 'DPI Used', 'limitless-artwork-analyzer' ),
-			'value' => esc_html( $data['dpi_used'] . ( ! empty( $data['dpi_assumed'] ) ? ' (assumed)' : '' ) ),
+			'key'   => __( 'DPI', 'limitless-artwork-analyzer' ),
+			'value' => esc_html( $this->format_dpi( $data ) ),
 		);
 
 		$item_data[] = array(
@@ -101,50 +96,12 @@ class LAA_Cart_Meta {
 			'value' => esc_html( $data['quality_rating'] ),
 		);
 
-		if ( ! empty( $data['scan_mode_label'] ) ) {
+		$warnings = $this->get_customer_warnings( $data );
+
+		if ( ! empty( $warnings ) ) {
 			$item_data[] = array(
-				'key'   => __( 'Analysis Mode', 'limitless-artwork-analyzer' ),
-				'value' => esc_html( $data['scan_mode_label'] ),
-			);
-		}
-
-		$item_data[] = array(
-			'key'   => __( 'Transparent Background', 'limitless-artwork-analyzer' ),
-			'value' => esc_html( $this->yes_no( array_key_exists( 'transparent_background', $data ) ? $data['transparent_background'] : null ) ),
-		);
-
-		$item_data[] = array(
-			'key'   => __( 'Has Transparency', 'limitless-artwork-analyzer' ),
-			'value' => esc_html( $this->yes_no( array_key_exists( 'has_transparency', $data ) ? $data['has_transparency'] : null ) ),
-		);
-
-		$item_data[] = array(
-			'key'   => __( 'Semi-Transparent Pixels', 'limitless-artwork-analyzer' ),
-			'value' => esc_html( $this->yes_no( array_key_exists( 'semi_transparent_pixels_detected', $data ) ? $data['semi_transparent_pixels_detected'] : null ) ),
-		);
-
-		$item_data[] = array(
-			'key'   => __( 'Long File Warning', 'limitless-artwork-analyzer' ),
-			'value' => esc_html( $this->yes_no( ! empty( $data['long_file_warning'] ) ) ),
-		);
-
-		if ( ! empty( $data['skipped_checks'] ) ) {
-			$item_data[] = array(
-				'key'   => __( 'Skipped Checks', 'limitless-artwork-analyzer' ),
-				'value' => esc_html( implode( ', ', $data['skipped_checks'] ) ),
-			);
-		}
-
-		if ( ! empty( $data['file_url'] ) ) {
-			$item_data[] = array(
-				'key'   => __( 'Uploaded PNG', 'limitless-artwork-analyzer' ),
-				'value' => wp_kses_post(
-					sprintf(
-						'<a href="%1$s" target="_blank" rel="noopener">%2$s</a>',
-						esc_url( $data['file_url'] ),
-						esc_html__( 'View uploaded file', 'limitless-artwork-analyzer' )
-					)
-				),
+				'key'   => __( 'Artwork Warnings', 'limitless-artwork-analyzer' ),
+				'value' => esc_html( implode( ' | ', $warnings ) ),
 			);
 		}
 
@@ -177,6 +134,12 @@ class LAA_Cart_Meta {
 		$item->add_meta_data( __( 'Artwork Has Transparency', 'limitless-artwork-analyzer' ), $this->yes_no( array_key_exists( 'has_transparency', $data ) ? $data['has_transparency'] : null ), true );
 		$item->add_meta_data( __( 'Artwork Transparent Background', 'limitless-artwork-analyzer' ), $this->yes_no( array_key_exists( 'transparent_background', $data ) ? $data['transparent_background'] : null ), true );
 		$item->add_meta_data( __( 'Artwork Semi-Transparent Pixels', 'limitless-artwork-analyzer' ), $this->yes_no( array_key_exists( 'semi_transparent_pixels_detected', $data ) ? $data['semi_transparent_pixels_detected'] : null ), true );
+		$item->add_meta_data( __( 'Artwork Semi-Transparent Pixel Count', 'limitless-artwork-analyzer' ), $this->format_nullable_number( isset( $data['semi_transparent_pixel_count'] ) ? $data['semi_transparent_pixel_count'] : null ), true );
+		$item->add_meta_data( __( 'Artwork Semi-Transparent Pixel Percentage', 'limitless-artwork-analyzer' ), $this->format_nullable_percentage( isset( $data['semi_transparent_pixel_percentage'] ) ? $data['semi_transparent_pixel_percentage'] : null ), true );
+		$item->add_meta_data( __( 'Artwork Semi-Transparent Edge Pixels', 'limitless-artwork-analyzer' ), $this->format_nullable_number( isset( $data['semi_transparent_edge_pixels'] ) ? $data['semi_transparent_edge_pixels'] : null ), true );
+		$item->add_meta_data( __( 'Artwork Semi-Transparent Interior Pixels', 'limitless-artwork-analyzer' ), $this->format_nullable_number( isset( $data['semi_transparent_interior_pixels'] ) ? $data['semi_transparent_interior_pixels'] : null ), true );
+		$item->add_meta_data( __( 'Artwork Semi-Transparent Interior Percentage', 'limitless-artwork-analyzer' ), $this->format_nullable_percentage( isset( $data['semi_transparent_interior_percentage'] ) ? $data['semi_transparent_interior_percentage'] : null ), true );
+		$item->add_meta_data( __( 'Artwork Alpha Thresholds Used', 'limitless-artwork-analyzer' ), $this->format_alpha_thresholds( isset( $data['alpha_thresholds_used'] ) ? $data['alpha_thresholds_used'] : array() ), true );
 		$item->add_meta_data( __( 'Artwork Long File Warning', 'limitless-artwork-analyzer' ), $this->yes_no( ! empty( $data['long_file_warning'] ) ), true );
 		$item->add_meta_data( __( 'Artwork File URL', 'limitless-artwork-analyzer' ), $data['file_url'], true );
 		$item->add_meta_data( __( 'Artwork File Path', 'limitless-artwork-analyzer' ), $data['file_path'], true );
@@ -231,6 +194,12 @@ class LAA_Cart_Meta {
 			'has_transparency'                 => $this->normalize_nullable_bool( $analysis, 'has_transparency' ),
 			'transparent_background'           => $this->normalize_nullable_bool( $analysis, 'transparent_background' ),
 			'semi_transparent_pixels_detected' => $this->normalize_nullable_bool( $analysis, 'semi_transparent_pixels_detected' ),
+			'semi_transparent_pixel_count'     => $this->normalize_nullable_int( $analysis, 'semi_transparent_pixel_count' ),
+			'semi_transparent_pixel_percentage' => $this->normalize_nullable_float( $analysis, 'semi_transparent_pixel_percentage' ),
+			'semi_transparent_edge_pixels'     => $this->normalize_nullable_int( $analysis, 'semi_transparent_edge_pixels' ),
+			'semi_transparent_interior_pixels' => $this->normalize_nullable_int( $analysis, 'semi_transparent_interior_pixels' ),
+			'semi_transparent_interior_percentage' => $this->normalize_nullable_float( $analysis, 'semi_transparent_interior_percentage' ),
+			'alpha_thresholds_used'            => $this->normalize_alpha_thresholds( isset( $analysis['alpha_thresholds_used'] ) ? $analysis['alpha_thresholds_used'] : array() ),
 			'long_file_warning'                => ! empty( $analysis['long_file_warning'] ),
 			'file_url'                         => isset( $analysis['file_url'] ) ? esc_url_raw( $analysis['file_url'] ) : '',
 			'file_path'                        => isset( $analysis['file_path'] ) ? sanitize_text_field( $analysis['file_path'] ) : '',
@@ -253,6 +222,126 @@ class LAA_Cart_Meta {
 	}
 
 	/**
+	 * Format a nullable whole number for admin order metadata.
+	 *
+	 * @param int|null $value Number or null when skipped.
+	 * @return string
+	 */
+	private function format_nullable_number( $value ) {
+		if ( null === $value ) {
+			return __( 'Skipped', 'limitless-artwork-analyzer' );
+		}
+
+		return number_format_i18n( (int) $value );
+	}
+
+	/**
+	 * Format a nullable percentage for admin order metadata.
+	 *
+	 * @param float|null $value Percentage or null when skipped.
+	 * @return string
+	 */
+	private function format_nullable_percentage( $value ) {
+		if ( null === $value ) {
+			return __( 'Skipped', 'limitless-artwork-analyzer' );
+		}
+
+		return rtrim( rtrim( number_format_i18n( (float) $value, 4 ), '0' ), '.' ) . '%';
+	}
+
+	/**
+	 * Format alpha detection thresholds for admin order metadata.
+	 *
+	 * @param array $thresholds Threshold data.
+	 * @return string
+	 */
+	private function format_alpha_thresholds( $thresholds ) {
+		if ( empty( $thresholds ) || ! is_array( $thresholds ) ) {
+			return '';
+		}
+
+		$lower      = isset( $thresholds['lower'] ) ? (int) $thresholds['lower'] : 20;
+		$upper      = isset( $thresholds['upper'] ) ? (int) $thresholds['upper'] : 235;
+		$percentage = isset( $thresholds['percentage'] ) ? (float) $thresholds['percentage'] : 0.25;
+		$ignore_edge_antialiasing = ! empty( $thresholds['ignore_edge_antialiasing'] );
+
+		return sprintf(
+			/* translators: 1: lower alpha, 2: upper alpha, 3: percentage, 4: yes/no value. */
+			__( 'Lower %1$d, upper %2$d, warning above %3$s%%, ignore edge anti-aliasing: %4$s', 'limitless-artwork-analyzer' ),
+			$lower,
+			$upper,
+			rtrim( rtrim( number_format_i18n( $percentage, 4 ), '0' ), '.' ),
+			$ignore_edge_antialiasing ? __( 'Yes', 'limitless-artwork-analyzer' ) : __( 'No', 'limitless-artwork-analyzer' )
+		);
+	}
+
+	/**
+	 * Format print dimensions for customer-facing cart and checkout output.
+	 *
+	 * @param array $data Stored analysis data.
+	 * @return string
+	 */
+	private function format_print_size( $data ) {
+		return sprintf(
+			'%1$s″ × %2$s″',
+			isset( $data['width_inches'] ) ? $data['width_inches'] : 0,
+			isset( $data['height_inches'] ) ? $data['height_inches'] : 0
+		);
+	}
+
+	/**
+	 * Format DPI for customer-facing cart and checkout output.
+	 *
+	 * @param array $data Stored analysis data.
+	 * @return string
+	 */
+	private function format_dpi( $data ) {
+		$dpi = isset( $data['dpi_used'] ) ? $data['dpi_used'] : 0;
+
+		if ( ! empty( $data['dpi_assumed'] ) ) {
+			return $dpi . ' (' . __( 'assumed', 'limitless-artwork-analyzer' ) . ')';
+		}
+
+		return (string) $dpi;
+	}
+
+	/**
+	 * Keep customer warnings useful and hide internal skipped-check details.
+	 *
+	 * @param array $data Stored analysis data.
+	 * @return array
+	 */
+	private function get_customer_warnings( $data ) {
+		$warnings = array();
+
+		if ( ! empty( $data['warnings'] ) && is_array( $data['warnings'] ) ) {
+			foreach ( $data['warnings'] as $warning ) {
+				if ( ! $this->is_skipped_analysis_warning( $warning ) ) {
+					$warnings[] = $warning;
+				}
+			}
+		}
+
+		if ( ! empty( $data['skipped_checks'] ) ) {
+			$warnings[] = __( 'This file is very large, so advanced transparency checks were skipped. Basic size and DPI checks were completed.', 'limitless-artwork-analyzer' );
+		}
+
+		return array_values( array_unique( $warnings ) );
+	}
+
+	/**
+	 * Detect internal skipped-analysis warning text.
+	 *
+	 * @param string $warning Warning text.
+	 * @return bool
+	 */
+	private function is_skipped_analysis_warning( $warning ) {
+		$warning = strtolower( (string) $warning );
+
+		return false !== strpos( $warning, 'too large to fully analyze' ) || false !== strpos( $warning, 'transparency checks were skipped' );
+	}
+
+	/**
 	 * Preserve skipped check values as null instead of converting them to false.
 	 *
 	 * @param array  $analysis Analysis data.
@@ -265,5 +354,54 @@ class LAA_Cart_Meta {
 		}
 
 		return ! empty( $analysis[ $key ] );
+	}
+
+	/**
+	 * Preserve skipped integer fields as null.
+	 *
+	 * @param array  $analysis Analysis data.
+	 * @param string $key      Analysis key.
+	 * @return int|null
+	 */
+	private function normalize_nullable_int( $analysis, $key ) {
+		if ( ! array_key_exists( $key, $analysis ) || null === $analysis[ $key ] ) {
+			return null;
+		}
+
+		return absint( $analysis[ $key ] );
+	}
+
+	/**
+	 * Preserve skipped float fields as null.
+	 *
+	 * @param array  $analysis Analysis data.
+	 * @param string $key      Analysis key.
+	 * @return float|null
+	 */
+	private function normalize_nullable_float( $analysis, $key ) {
+		if ( ! array_key_exists( $key, $analysis ) || null === $analysis[ $key ] ) {
+			return null;
+		}
+
+		return (float) $analysis[ $key ];
+	}
+
+	/**
+	 * Sanitize alpha threshold metadata before cart storage.
+	 *
+	 * @param array $thresholds Raw threshold data.
+	 * @return array
+	 */
+	private function normalize_alpha_thresholds( $thresholds ) {
+		if ( ! is_array( $thresholds ) ) {
+			return array();
+		}
+
+		return array(
+			'lower'                    => isset( $thresholds['lower'] ) ? min( 255, absint( $thresholds['lower'] ) ) : 20,
+			'upper'                    => isset( $thresholds['upper'] ) ? min( 255, absint( $thresholds['upper'] ) ) : 235,
+			'percentage'               => isset( $thresholds['percentage'] ) ? min( 100, max( 0, (float) $thresholds['percentage'] ) ) : 0.25,
+			'ignore_edge_antialiasing' => ! empty( $thresholds['ignore_edge_antialiasing'] ),
+		);
 	}
 }

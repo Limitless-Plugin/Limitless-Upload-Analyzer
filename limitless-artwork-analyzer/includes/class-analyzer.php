@@ -24,6 +24,16 @@ class LAA_Analyzer {
 	private $max_samples = 250000;
 
 	/**
+	 * Files at or below this size should normally receive full analysis.
+	 *
+	 * This protects small customer files from being downgraded because a local
+	 * WordPress request happens to have conservative reported free memory.
+	 *
+	 * @var int
+	 */
+	private $small_file_full_scan_pixels = 10000000;
+
+	/**
 	 * Analyze a saved PNG file.
 	 *
 	 * @param string $file_path          Local PNG file path.
@@ -91,8 +101,20 @@ class LAA_Analyzer {
 			);
 		}
 
-		$pixel_count = $pixel_width * $pixel_height;
+		$pixel_count = (int) ( (float) $pixel_width * (float) $pixel_height );
 		$scan_plan   = $this->get_scan_plan( $pixel_count, $settings );
+
+		$this->log_step(
+			'scan threshold decision',
+			array(
+				'pixel_width'            => $pixel_width,
+				'pixel_height'           => $pixel_height,
+				'calculated_pixel_count' => $pixel_count,
+				'full_scan_threshold'    => $scan_plan['full_limit'],
+				'sampled_scan_threshold' => $scan_plan['sampled_limit'],
+				'selected_scan_path'     => $scan_plan['mode'],
+			)
+		);
 
 		$dpi_data      = $this->read_png_dpi( $file_path );
 		$dpi_assumed   = false;
@@ -116,22 +138,23 @@ class LAA_Analyzer {
 		$warnings      = array();
 		$skipped_checks = array();
 		$skip_reason    = '';
-		$transparency   = $this->get_skipped_transparency_result();
+		$alpha_settings = $this->get_semi_transparent_alpha_settings( $settings );
+		$transparency   = $this->get_skipped_transparency_result( array(), '', $alpha_settings );
 
 		if ( 'skipped' === $scan_plan['mode'] ) {
 			$warnings[]      = __( 'This PNG uploaded successfully, but it is too large to fully analyze in this local test environment.', 'limitless-artwork-analyzer' );
 			$skipped_checks  = $this->get_transparency_check_names();
 			$skip_reason     = __( 'File pixel count exceeds the sampled scan limit.', 'limitless-artwork-analyzer' );
-			$transparency    = $this->get_skipped_transparency_result( $skipped_checks, $skip_reason );
+			$transparency    = $this->get_skipped_transparency_result( $skipped_checks, $skip_reason, $alpha_settings );
 			$this->log_skipped_sampling( $pixel_width, $pixel_height, $scan_plan, $skipped_checks, $skip_reason );
 		} else {
-			$scan_skip = $this->get_scan_skip_reason( $pixel_width, $pixel_height );
+			$scan_skip = $this->get_scan_skip_reason( $pixel_width, $pixel_height, $pixel_count );
 
 			if ( '' !== $scan_skip ) {
 				$warnings[]      = $scan_skip;
 				$skipped_checks  = $this->get_transparency_check_names();
 				$skip_reason     = $scan_skip;
-				$transparency    = $this->get_skipped_transparency_result( $skipped_checks, $skip_reason );
+				$transparency    = $this->get_skipped_transparency_result( $skipped_checks, $skip_reason, $alpha_settings );
 				$this->log_skipped_sampling( $pixel_width, $pixel_height, $scan_plan, $skipped_checks, $skip_reason );
 			} else {
 				$image = @imagecreatefrompng( $file_path );
@@ -140,10 +163,10 @@ class LAA_Analyzer {
 					$warnings[]      = __( 'Transparency checks were skipped because this PNG could not be opened for pixel analysis.', 'limitless-artwork-analyzer' );
 					$skipped_checks  = $this->get_transparency_check_names();
 					$skip_reason     = 'imagecreatefrompng() returned false. ' . $this->get_last_php_error_message();
-					$transparency    = $this->get_skipped_transparency_result( $skipped_checks, $skip_reason );
+					$transparency    = $this->get_skipped_transparency_result( $skipped_checks, $skip_reason, $alpha_settings );
 					$this->log_skipped_sampling( $pixel_width, $pixel_height, $scan_plan, $skipped_checks, $skip_reason );
 				} else {
-					$transparency = $this->inspect_transparency( $image, $pixel_width, $pixel_height, (int) $settings['semi_transparent_alpha_threshold'], $scan_plan );
+					$transparency = $this->inspect_transparency( $image, $pixel_width, $pixel_height, $alpha_settings, $scan_plan );
 					imagedestroy( $image );
 				}
 			}
@@ -203,6 +226,12 @@ class LAA_Analyzer {
 			'transparent_background'              => $transparency['transparent_background'],
 			'transparent_background_ratio'        => $transparency['transparent_background_ratio'],
 			'semi_transparent_pixels_detected'    => $transparency['semi_transparent_pixels_detected'],
+			'semi_transparent_pixel_count'        => $transparency['semi_transparent_pixel_count'],
+			'semi_transparent_pixel_percentage'   => $transparency['semi_transparent_pixel_percentage'],
+			'semi_transparent_edge_pixels'        => $transparency['semi_transparent_edge_pixels'],
+			'semi_transparent_interior_pixels'    => $transparency['semi_transparent_interior_pixels'],
+			'semi_transparent_interior_percentage' => $transparency['semi_transparent_interior_percentage'],
+			'alpha_thresholds_used'               => $transparency['alpha_thresholds_used'],
 			'sampled_pixel_count'                 => $transparency['sampled_pixel_count'],
 			'dimension_warning'                   => $dimension_warning,
 			'long_file_warning'                   => $long_file_warning,
@@ -272,6 +301,48 @@ class LAA_Analyzer {
 	}
 
 	/**
+	 * Normalize semi-transparent alpha settings.
+	 *
+	 * Opacity is normalized so 0 is transparent and 255 is opaque. The detector
+	 * counts only pixels between the lower and upper thresholds, which avoids
+	 * treating normal transparent/opaque anti-aliasing as a DTF warning.
+	 *
+	 * @param array $settings Plugin settings.
+	 * @return array
+	 */
+	private function get_semi_transparent_alpha_settings( $settings ) {
+		$lower      = isset( $settings['semi_transparent_alpha_lower_threshold'] ) ? absint( $settings['semi_transparent_alpha_lower_threshold'] ) : 20;
+		$upper      = isset( $settings['semi_transparent_alpha_upper_threshold'] ) ? absint( $settings['semi_transparent_alpha_upper_threshold'] ) : 235;
+		$percentage = isset( $settings['semi_transparent_pixel_percentage_threshold'] ) ? (float) $settings['semi_transparent_pixel_percentage_threshold'] : 0.25;
+		$ignore_edge_antialiasing = ! isset( $settings['ignore_edge_antialiasing'] ) || 'yes' === $settings['ignore_edge_antialiasing'];
+
+		$lower      = min( 255, max( 0, $lower ) );
+		$upper      = min( 255, max( 0, $upper ) );
+		$percentage = min( 100, max( 0, $percentage ) );
+
+		if ( $lower > $upper ) {
+			$temp  = $lower;
+			$lower = $upper;
+			$upper = $temp;
+		}
+
+		if ( $lower === $upper ) {
+			if ( $upper < 255 ) {
+				$upper++;
+			} else {
+				$lower--;
+			}
+		}
+
+		return array(
+			'lower'                    => $lower,
+			'upper'                    => $upper,
+			'percentage'               => $percentage,
+			'ignore_edge_antialiasing' => $ignore_edge_antialiasing,
+		);
+	}
+
+	/**
 	 * Inspect transparency using sampled pixels.
 	 *
 	 * PNG alpha in this plugin is normalized so 0 is fully transparent and
@@ -280,23 +351,32 @@ class LAA_Analyzer {
 	 * @param resource|GdImage $image           GD image.
 	 * @param int             $width           Pixel width.
 	 * @param int             $height          Pixel height.
-	 * @param int             $alpha_threshold Semi-transparent threshold.
+	 * @param array           $alpha_settings  Semi-transparent detection settings.
 	 * @return array
 	 */
-	private function inspect_transparency( $image, $width, $height, $alpha_threshold, $scan_plan ) {
-		$step                      = $this->get_sampling_step( $width, $height, $scan_plan['mode'] );
-		$sampled_count             = 0;
-		$has_transparency          = false;
-		$semi_transparent_detected = false;
+	private function inspect_transparency( $image, $width, $height, $alpha_settings, $scan_plan ) {
+		$step                                  = $this->get_sampling_step( $width, $height, $scan_plan['mode'] );
+		$sampled_count                         = 0;
+		$has_transparency                      = false;
+		$semi_transparent_pixel_count          = 0;
+		$semi_transparent_edge_pixels          = 0;
+		$semi_transparent_interior_pixels      = 0;
+		$lower_threshold                       = $alpha_settings['lower'];
+		$upper_threshold                       = $alpha_settings['upper'];
+		$percentage_threshold                  = $alpha_settings['percentage'];
+		$ignore_edge_antialiasing              = ! empty( $alpha_settings['ignore_edge_antialiasing'] );
 
 		$this->log_step(
 			'pixel sampling started',
 			array(
-				'pixel_width'     => $width,
-				'pixel_height'    => $height,
-				'scan_mode'       => $scan_plan['mode'],
-				'sampling_step'   => $step,
-				'alpha_threshold' => $alpha_threshold,
+				'pixel_width'                            => $width,
+				'pixel_height'                           => $height,
+				'scan_mode'                              => $scan_plan['mode'],
+				'sampling_step'                          => $step,
+				'semi_transparent_lower_alpha_threshold' => $lower_threshold,
+				'semi_transparent_upper_alpha_threshold' => $upper_threshold,
+				'semi_transparent_percentage_threshold'  => $percentage_threshold,
+				'ignore_edge_antialiasing'               => $ignore_edge_antialiasing,
 			)
 		);
 
@@ -309,22 +389,36 @@ class LAA_Analyzer {
 					$has_transparency = true;
 				}
 
-				if ( $opacity > 0 && $opacity < $alpha_threshold ) {
-					$semi_transparent_detected = true;
-				}
+				if ( $opacity > $lower_threshold && $opacity < $upper_threshold ) {
+					$semi_transparent_pixel_count++;
 
-				if ( $has_transparency && $semi_transparent_detected ) {
-					break 2;
+					if (
+						$ignore_edge_antialiasing
+						&& $this->is_edge_antialiasing_pixel( $image, $x, $y, $width, $height, $lower_threshold, $upper_threshold )
+					) {
+						$semi_transparent_edge_pixels++;
+					} else {
+						$semi_transparent_interior_pixels++;
+					}
 				}
 			}
 		}
 
-		$edge_result = $this->inspect_edges_for_transparency( $image, $width, $height );
-		$result      = array(
+		$semi_transparent_percentage          = $sampled_count > 0 ? round( ( $semi_transparent_pixel_count / $sampled_count ) * 100, 4 ) : 0;
+		$semi_transparent_interior_percentage = $sampled_count > 0 ? round( ( $semi_transparent_interior_pixels / $sampled_count ) * 100, 4 ) : 0;
+		$semi_transparent_detected            = $semi_transparent_interior_percentage > $percentage_threshold;
+		$edge_result                          = $this->inspect_edges_for_transparency( $image, $width, $height );
+		$result                               = array(
 			'has_transparency'                 => $has_transparency || $edge_result['has_transparency'],
 			'transparent_background'           => $edge_result['transparent_background'],
 			'transparent_background_ratio'     => $edge_result['transparent_background_ratio'],
 			'semi_transparent_pixels_detected' => $semi_transparent_detected,
+			'semi_transparent_pixel_count'     => $semi_transparent_pixel_count,
+			'semi_transparent_pixel_percentage' => $semi_transparent_percentage,
+			'semi_transparent_edge_pixels'     => $semi_transparent_edge_pixels,
+			'semi_transparent_interior_pixels' => $semi_transparent_interior_pixels,
+			'semi_transparent_interior_percentage' => $semi_transparent_interior_percentage,
+			'alpha_thresholds_used'            => $alpha_settings,
 			'sampled_pixel_count'              => $sampled_count + $edge_result['sampled_pixel_count'],
 		);
 
@@ -336,10 +430,70 @@ class LAA_Analyzer {
 				'has_transparency'                 => $result['has_transparency'],
 				'transparent_background'           => $result['transparent_background'],
 				'semi_transparent_pixels_detected' => $result['semi_transparent_pixels_detected'],
+				'semi_transparent_pixel_count'     => $result['semi_transparent_pixel_count'],
+				'semi_transparent_pixel_percentage' => $result['semi_transparent_pixel_percentage'],
+				'semi_transparent_edge_pixels'     => $result['semi_transparent_edge_pixels'],
+				'semi_transparent_interior_pixels' => $result['semi_transparent_interior_pixels'],
+				'semi_transparent_interior_percentage' => $result['semi_transparent_interior_percentage'],
+				'alpha_thresholds_used'            => $result['alpha_thresholds_used'],
 			)
 		);
 
 		return $result;
+	}
+
+	/**
+	 * Decide whether a semi-transparent pixel looks like normal edge smoothing.
+	 *
+	 * A typical anti-aliased artwork edge has semi-transparent pixels directly
+	 * between transparent background pixels and opaque artwork pixels. Interior
+	 * fades, shadows, glows, and overlays usually have nearby semi-transparent
+	 * pixels without both sides of that transparent-to-opaque edge transition.
+	 *
+	 * @param resource|GdImage $image           GD image.
+	 * @param int             $x               X coordinate.
+	 * @param int             $y               Y coordinate.
+	 * @param int             $width           Pixel width.
+	 * @param int             $height          Pixel height.
+	 * @param int             $lower_threshold Transparent-like cutoff.
+	 * @param int             $upper_threshold Opaque-like cutoff.
+	 * @return bool
+	 */
+	private function is_edge_antialiasing_pixel( $image, $x, $y, $width, $height, $lower_threshold, $upper_threshold ) {
+		$radius          = 2;
+		$has_transparent = false;
+		$has_opaque      = false;
+
+		for ( $offset_y = -$radius; $offset_y <= $radius; $offset_y++ ) {
+			for ( $offset_x = -$radius; $offset_x <= $radius; $offset_x++ ) {
+				if ( 0 === $offset_x && 0 === $offset_y ) {
+					continue;
+				}
+
+				$neighbor_x = $x + $offset_x;
+				$neighbor_y = $y + $offset_y;
+
+				if ( $neighbor_x < 0 || $neighbor_y < 0 || $neighbor_x >= $width || $neighbor_y >= $height ) {
+					continue;
+				}
+
+				$neighbor_opacity = $this->get_pixel_opacity( $image, $neighbor_x, $neighbor_y );
+
+				if ( $neighbor_opacity <= $lower_threshold ) {
+					$has_transparent = true;
+				}
+
+				if ( $neighbor_opacity >= $upper_threshold ) {
+					$has_opaque = true;
+				}
+
+				if ( $has_transparent && $has_opaque ) {
+					return true;
+				}
+			}
+		}
+
+		return false;
 	}
 
 	/**
@@ -517,6 +671,7 @@ class LAA_Analyzer {
 	private function get_scan_plan( $pixel_count, $settings ) {
 		$full_limit    = isset( $settings['max_full_scan_pixels'] ) ? max( 1, absint( $settings['max_full_scan_pixels'] ) ) : 50000000;
 		$sampled_limit = isset( $settings['max_sampled_scan_pixels'] ) ? max( 1, absint( $settings['max_sampled_scan_pixels'] ) ) : 250000000;
+		$full_limit    = max( $full_limit, $this->small_file_full_scan_pixels );
 
 		if ( $sampled_limit < $full_limit ) {
 			$sampled_limit = $full_limit;
@@ -565,17 +720,24 @@ class LAA_Analyzer {
 	 *
 	 * @param array  $skipped_checks Skipped check names.
 	 * @param string $reason         Skip reason.
+	 * @param array  $alpha_settings Semi-transparent detection settings.
 	 * @return array
 	 */
-	private function get_skipped_transparency_result( $skipped_checks = array(), $reason = '' ) {
+	private function get_skipped_transparency_result( $skipped_checks = array(), $reason = '', $alpha_settings = array() ) {
 		return array(
-			'has_transparency'                 => null,
-			'transparent_background'           => null,
-			'transparent_background_ratio'     => null,
-			'semi_transparent_pixels_detected' => null,
-			'sampled_pixel_count'              => 0,
-			'skipped_checks'                   => $skipped_checks,
-			'skipped_check_reason'             => $reason,
+			'has_transparency'                   => null,
+			'transparent_background'             => null,
+			'transparent_background_ratio'       => null,
+			'semi_transparent_pixels_detected'   => null,
+			'semi_transparent_pixel_count'       => null,
+			'semi_transparent_pixel_percentage'  => null,
+			'semi_transparent_edge_pixels'       => null,
+			'semi_transparent_interior_pixels'   => null,
+			'semi_transparent_interior_percentage' => null,
+			'alpha_thresholds_used'              => $alpha_settings,
+			'sampled_pixel_count'                => 0,
+			'skipped_checks'                     => $skipped_checks,
+			'skipped_check_reason'               => $reason,
 		);
 	}
 
@@ -586,22 +748,75 @@ class LAA_Analyzer {
 	 * @param int $height Pixel height.
 	 * @return string Empty when scanning can proceed, otherwise customer-facing skip reason.
 	 */
-	private function get_scan_skip_reason( $width, $height ) {
+	private function get_scan_skip_reason( $width, $height, $pixel_count ) {
 		if ( ! extension_loaded( 'gd' ) ) {
+			$this->log_scan_skip_reason( $width, $height, $pixel_count, 'GD extension is not loaded.' );
 			return __( 'Transparency checks were skipped because PHP GD is not available in this local environment.', 'limitless-artwork-analyzer' );
 		}
 
 		if ( ! function_exists( 'imagecreatefrompng' ) ) {
+			$this->log_scan_skip_reason( $width, $height, $pixel_count, 'imagecreatefrompng() is not available.' );
 			return __( 'Transparency checks were skipped because PNG pixel analysis is not available in this local environment.', 'limitless-artwork-analyzer' );
 		}
 
-		$memory_check = $this->check_image_memory_safety( $width, $height );
+		$memory_check = $this->check_image_memory_safety( $width, $height, $pixel_count );
 
 		if ( is_wp_error( $memory_check ) ) {
+			$this->log_scan_skip_reason( $width, $height, $pixel_count, $this->get_wp_error_technical_message( $memory_check ), $memory_check->get_error_data() );
 			return __( 'Transparency checks were skipped because this PNG is too large for this local test environment to scan safely.', 'limitless-artwork-analyzer' );
 		}
 
+		$this->log_step(
+			'scan skip decision',
+			array(
+				'pixel_width'            => $width,
+				'pixel_height'           => $height,
+				'calculated_pixel_count' => $pixel_count,
+				'skip_reason'            => '',
+				'will_skip_checks'       => false,
+			)
+		);
+
 		return '';
+	}
+
+	/**
+	 * Log why the transparency checks are being skipped.
+	 *
+	 * @param int    $width       Pixel width.
+	 * @param int    $height      Pixel height.
+	 * @param int    $pixel_count Pixel count.
+	 * @param string $reason      Technical reason.
+	 * @param mixed  $details     Optional details.
+	 */
+	private function log_scan_skip_reason( $width, $height, $pixel_count, $reason, $details = array() ) {
+		$this->log_step(
+			'scan skip decision',
+			array(
+				'pixel_width'            => $width,
+				'pixel_height'           => $height,
+				'calculated_pixel_count' => $pixel_count,
+				'skip_reason'            => $reason,
+				'skip_details'           => $details,
+				'will_skip_checks'       => true,
+			)
+		);
+	}
+
+	/**
+	 * Get a useful technical message from a WP_Error.
+	 *
+	 * @param WP_Error $error Error object.
+	 * @return string
+	 */
+	private function get_wp_error_technical_message( $error ) {
+		$data = $error->get_error_data();
+
+		if ( is_array( $data ) && ! empty( $data['technical_message'] ) ) {
+			return (string) $data['technical_message'];
+		}
+
+		return $error->get_error_message();
 	}
 
 	/**
@@ -646,7 +861,7 @@ class LAA_Analyzer {
 	 * @param int $height Pixel height.
 	 * @return true|WP_Error
 	 */
-	private function check_image_memory_safety( $width, $height ) {
+	private function check_image_memory_safety( $width, $height, $pixel_count ) {
 		$memory_limit_bytes = $this->parse_size_to_bytes( ini_get( 'memory_limit' ) );
 
 		if ( $memory_limit_bytes < 0 ) {
@@ -660,7 +875,29 @@ class LAA_Analyzer {
 		$current_usage_bytes = memory_get_usage( true );
 		$available_bytes     = max( 0, $memory_limit_bytes - $current_usage_bytes );
 		$estimated_bytes     = $this->estimate_gd_memory_bytes( $width, $height );
-		$safe_available      = (int) floor( $available_bytes * 0.7 );
+		$reserve_bytes       = 16 * MB_IN_BYTES;
+		$safe_available      = max( 0, $available_bytes - $reserve_bytes );
+		$hard_limit_bytes    = (int) floor( $memory_limit_bytes * 0.85 );
+
+		$this->log_step(
+			'memory safety estimate',
+			array(
+				'pixel_width'            => $width,
+				'pixel_height'           => $height,
+				'calculated_pixel_count' => $pixel_count,
+				'estimated_bytes'        => $estimated_bytes,
+				'memory_limit_bytes'     => $memory_limit_bytes,
+				'current_usage_bytes'    => $current_usage_bytes,
+				'available_bytes'        => $available_bytes,
+				'safe_available_bytes'   => $safe_available,
+				'hard_limit_bytes'       => $hard_limit_bytes,
+				'small_file_floor'       => $this->small_file_full_scan_pixels,
+			)
+		);
+
+		if ( $pixel_count <= $this->small_file_full_scan_pixels && $estimated_bytes <= $hard_limit_bytes ) {
+			return true;
+		}
 
 		if ( $estimated_bytes > $safe_available ) {
 			return new WP_Error(
@@ -675,6 +912,8 @@ class LAA_Analyzer {
 					'current_usage_bytes'   => $current_usage_bytes,
 					'available_bytes'       => $available_bytes,
 					'safe_available_bytes'  => $safe_available,
+					'hard_limit_bytes'      => $hard_limit_bytes,
+					'pixel_count'           => $pixel_count,
 					'php_memory_limit'      => ini_get( 'memory_limit' ),
 				)
 			);
@@ -693,7 +932,7 @@ class LAA_Analyzer {
 	private function estimate_gd_memory_bytes( $width, $height ) {
 		$pixels = (float) $width * (float) $height;
 
-		return (int) ceil( ( $pixels * 8 ) + ( 32 * 1024 * 1024 ) );
+		return (int) ceil( ( $pixels * 5 ) + ( 16 * MB_IN_BYTES ) );
 	}
 
 	/**
